@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SensorAnalysis.Agents</RootNamespace>
+    <AssemblyName>SensorAnalysis.Agents</AssemblyName>
+    <Description>Built-in agent strategies, deployers, and watchers.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Core\SensorAnalysis.Core.csproj" />
+  </ItemGroup>
+
+</Project>

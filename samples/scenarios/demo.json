@@ -1,0 +1,25 @@
+{
+  "title": "Demo – 8 greedy agents, 4 incidents",
+  "seed": 42,
+  "tileColumns": 12,
+  "tileRows": 12,
+  "tileWidthPx": 40,
+  "tileHeightPx": 40,
+  "agents": [
+    { "type": "GreedyIncident", "x": 40, "y": 40, "sensorRange": 80, "label": "G0" },
+    { "type": "GreedyIncident", "x": 200, "y": 60, "sensorRange": 80, "label": "G1" },
+    { "type": "GreedyIncident", "x": 100, "y": 300, "sensorRange": 80, "label": "G2" },
+    { "type": "GreedyIncident", "x": 350, "y": 200, "sensorRange": 80, "label": "G3" },
+    { "type": "Stigmergy", "x": 80, "y": 150, "sensorRange": 90, "label": "S0" },
+    { "type": "Stigmergy", "x": 250, "y": 280, "sensorRange": 90, "label": "S1" },
+    { "type": "RandomWalk", "x": 180, "y": 180, "sensorRange": 60, "label": "R0" },
+    { "type": "RandomWalk", "x": 320, "y": 100, "sensorRange": 60, "label": "R1" }
+  ],
+  "incidents": [
+    { "x": 120, "y": 120, "intensity": 1.0, "label": "I0" },
+    { "x": 300, "y": 80, "intensity": 1.0, "label": "I1" },
+    { "x": 200, "y": 350, "intensity": 1.0, "label": "I2" },
+    { "x": 400, "y": 300, "intensity": 1.0, "label": "I3" }
+  ],
+  "notes": "Mixed strategies for a first visual demo"
+}

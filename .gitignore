@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+TestResults/
+coverage*/
+experiments/
+smoke-out/
+*.trx
+.DS_Store
+Thumbs.db

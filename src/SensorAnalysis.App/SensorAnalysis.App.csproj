@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SensorAnalysis.App</RootNamespace>
+    <AssemblyName>SensorAnalysis.App</AssemblyName>
+    <Description>WPF visualization and experiment control UI for SensorAnalysis.</Description>
+    <ApplicationIcon />
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Core\SensorAnalysis.Core.csproj" />
+    <ProjectReference Include="..\SensorAnalysis.Agents\SensorAnalysis.Agents.csproj" />
+  </ItemGroup>
+
+</Project>

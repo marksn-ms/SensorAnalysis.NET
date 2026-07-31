@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  DOTNET_VERSION: "8.0.x"
+
+jobs:
+  build-test:
+    runs-on: windows-latest   # WPF project needs Windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - run: dotnet restore
+      - run: dotnet build -c Release --no-restore
+      - run: dotnet test -c Release --no-build --logger trx
+      - name: Smoke CLI
+        run: |
+          dotnet run --project src/SensorAnalysis.Cli -c Release --no-build -- `
+            --trials 2 --ticks 20 --agents 5 --incidents 2 `
+            --agent-type RandomWalk --seed 1 --out ./smoke-out
+          Test-Path ./smoke-out/metrics.csv
