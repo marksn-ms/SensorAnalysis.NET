@@ -53,4 +53,25 @@ public sealed class DeployRequest
     /// Default sensor range to assign to created agents (domain units, default: 100).
     /// </summary>
     public double SensorRange { get; init; } = 100;
+
+    /// <summary>
+    /// Number of adversary agents to mix into the deployment (default: 0).
+    /// When greater than zero, <see cref="AdversaryFactory"/> must be supplied.
+    /// </summary>
+    public int AdversaryCount { get; init; } = 0;
+
+    /// <summary>
+    /// Factory used to create adversary agents when <see cref="AdversaryCount"/> &gt; 0.
+    /// </summary>
+    public Func<string, Domain.Agent>? AdversaryFactory { get; init; }
+
+    /// <summary>
+    /// Gaussian deployment sigma in world units (used by Gaussian deployers). Default: 80.
+    /// </summary>
+    public double DeploySigma { get; init; } = 80;
+
+    /// <summary>
+    /// Optional drop-point for Gaussian agent deployment. When null, world center is used.
+    /// </summary>
+    public Domain.Vec2? DropPoint { get; init; }
 }

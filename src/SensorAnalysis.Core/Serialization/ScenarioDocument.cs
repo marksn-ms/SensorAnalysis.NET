@@ -256,11 +256,11 @@ public sealed class SimulationRunner
             Reset(request.WorldOptions, seed);
             World!.CurrentTrial = trial;
 
-            foreach (var w in _watchers)
-                w.OnTrialStart(World, trial);
-
             Deploy(request.Deployer, request.DeployRequest);
             agentTypes = World.Agents.Select(a => a.AgentType).Distinct().ToArray();
+
+            foreach (var w in _watchers)
+                w.OnTrialStart(World, trial);
 
             RunTicks(request.TicksPerTrial, ct);
 

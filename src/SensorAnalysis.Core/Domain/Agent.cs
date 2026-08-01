@@ -6,11 +6,25 @@ namespace SensorAnalysis.Core.Domain;
 /// </summary>
 public class Agent : WorldObject
 {
+    private readonly List<MessageInfo> _inbox = new();
+
     /// <summary>
     /// Maximum distance (in world units) this agent can sense incidents and other agents.
     /// Default: 100.
     /// </summary>
     public double SensorRange { get; set; } = 100;
+
+    /// <summary>
+    /// Radio range used when transmitting. Defaults to <see cref="SensorRange"/> when null.
+    /// </summary>
+    public double? CommRange { get; set; }
+
+    /// <summary>
+    /// When true (honest default), the agent only considers broadcasts (<c>ToAgentId == null</c>)
+    /// and messages addressed to itself. When false, the agent may eavesdrop on traffic
+    /// addressed to others (adversary / promiscuous-receiver mode).
+    /// </summary>
+    public bool FilterToAddressedTraffic { get; set; } = true;
 
     /// <summary>
     /// The action the agent performed on the most recent tick.
@@ -32,6 +46,32 @@ public class Agent : WorldObject
     /// Identifier of the agent type (factory name or class label).
     /// </summary>
     public string AgentType { get; init; } = "Agent";
+
+    /// <summary>Effective transmit/receive range for radio messages.</summary>
+    public double EffectiveCommRange => CommRange ?? SensorRange;
+
+    /// <summary>
+    /// Enqueue a received radio message for processing on the next observation.
+    /// Delivery is range-limited by the sender; address filtering happens in <see cref="DrainInbox"/>.
+    /// </summary>
+    /// <param name="message">Delivered message snapshot.</param>
+    public void Receive(MessageInfo message) => _inbox.Add(message);
+
+    /// <summary>
+    /// Returns inbox messages this agent is willing to consider, then clears the inbox.
+    /// </summary>
+    public IReadOnlyList<MessageInfo> DrainInbox()
+    {
+        IEnumerable<MessageInfo> q = _inbox;
+        if (FilterToAddressedTraffic)
+        {
+            q = q.Where(m => m.ToAgentId is null || m.ToAgentId == Id);
+        }
+
+        var list = q.ToList();
+        _inbox.Clear();
+        return list;
+    }
 
     /// <summary>
     /// Override to choose the next action from local observations.
@@ -71,7 +111,10 @@ public sealed record AgentObservation
     /// <summary>Information about incidents within sensory range.</summary>
     public required IReadOnlyList<IncidentInfo> NearbyIncidents { get; init; }
 
-    /// <summary>Messages (broadcast/local) visible to the agent on this tick.</summary>
+    /// <summary>
+    /// Radio messages delivered to this agent's inbox since the previous observation
+    /// (after optional address filtering).
+    /// </summary>
     public required IReadOnlyList<MessageInfo> NearbyMessages { get; init; }
 
     /// <summary>Immediate reward observed on this tick (may be zero or domain-specific).</summary>
@@ -92,8 +135,17 @@ public readonly record struct IncidentInfo(int Id, Vec2 Position, double Intensi
 
 /// <summary>Lightweight information about a message observed by an agent.</summary>
 /// <param name="Id">Unique runtime identifier of the message.</param>
-/// <param name="Position">Origin position of the message.</param>
+/// <param name="Position">Origin position of the transmitter when sent.</param>
 /// <param name="FromType">Agent type that sent the message.</param>
+/// <param name="FromAgentId">Runtime id of the sender, if known.</param>
+/// <param name="ToAgentId">Intended recipient, or <c>null</c> for broadcast.</param>
 /// <param name="Payload">Message payload.</param>
-/// <param name="TtlRemaining">Ticks remaining before the message expires.</param>
-public readonly record struct MessageInfo(int Id, Vec2 Position, string FromType, string Payload, int TtlRemaining);
+/// <param name="TtlRemaining">Ticks remaining before an optional world echo expires.</param>
+public readonly record struct MessageInfo(
+    int Id,
+    Vec2 Position,
+    string FromType,
+    int? FromAgentId,
+    int? ToAgentId,
+    string Payload,
+    int TtlRemaining);

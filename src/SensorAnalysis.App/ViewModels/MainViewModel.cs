@@ -40,8 +40,11 @@ public partial class MainViewModel : ObservableObject
         _factories.Register(new RandomWalkAgentFactory());
         _factories.Register(new GreedyIncidentAgentFactory());
         _factories.Register(new StigmergyAgentFactory());
+        _factories.Register(new CooperativeSearchAgentFactory());
+        _factories.Register(new DeceptiveStigmergyAgentFactory());
+        _factories.Register(new TrustAwareSearchAgentFactory());
         AgentTypeNames = new ObservableCollection<string>(_factories.Names);
-        SelectedAgentType = "GreedyIncident";
+        SelectedAgentType = "CooperativeSearch";
 
         _runner.AddWatcher(_coverageWatcher);
         _runner.AddWatcher(_connectivityWatcher);

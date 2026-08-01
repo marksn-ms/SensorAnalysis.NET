@@ -123,10 +123,8 @@ public sealed class SimWorld
             .Select(i => new IncidentInfo(i.Id, i.Position, i.Intensity))
             .ToList();
 
-        var nearbyMessages = _messages
-            .Where(m => Vec2.Distance(m.Position, self.Position) <= range)
-            .Select(m => new MessageInfo(m.Id, m.Position, m.FromAgentType, m.Payload, m.Ttl))
-            .ToList();
+        // Decision-facing messages come from the radio inbox (not lingering environmental reads).
+        var nearbyMessages = self.DrainInbox();
 
         var obs = new AgentObservation
         {
@@ -139,6 +137,46 @@ public sealed class SimWorld
         };
         // Compute reward with full world context (coverage bonus needs tile state)
         return obs with { InstantReward = RewardModel.Evaluate(self, obs, this) };
+    }
+
+    /// <summary>
+    /// Transmit a radio message from <paramref name="sender"/> to in-range agents' inboxes.
+    /// A short-lived world echo is retained for visualization/metrics only; agents decide
+    /// from inbox deliveries, not by "smelling" the echo.
+    /// </summary>
+    /// <param name="sender">Transmitting agent.</param>
+    /// <param name="payload">Opaque payload (e.g. incident claim).</param>
+    /// <param name="ttl">World-echo TTL for UI/metrics.</param>
+    /// <param name="toAgentId">Optional addressee; <c>null</c> = broadcast.</param>
+    public void Transmit(Agent sender, string payload, int ttl = 50, int? toAgentId = null)
+    {
+        var message = new Message
+        {
+            Position = sender.Position,
+            FromAgentType = sender.AgentType,
+            FromAgentId = sender.Id,
+            ToAgentId = toAgentId,
+            Payload = payload,
+            Ttl = ttl
+        };
+        Add(message);
+
+        var info = new MessageInfo(
+            message.Id,
+            message.Position,
+            message.FromAgentType,
+            message.FromAgentId,
+            message.ToAgentId,
+            message.Payload,
+            message.Ttl);
+
+        var range = sender.EffectiveCommRange;
+        foreach (var agent in _agents)
+        {
+            if (agent.Id == sender.Id) continue;
+            if (Vec2.Distance(agent.Position, sender.Position) > range) continue;
+            agent.Receive(info);
+        }
     }
 
     /// <summary>Advance the world by one tick.</summary>

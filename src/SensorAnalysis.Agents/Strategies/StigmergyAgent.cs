@@ -5,16 +5,16 @@ using SensorAnalysis.Core.Messaging;
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Leaves environmental markers when it finds an incident, and is attracted to
-/// markers left by others. A simple stigmergic / pheromone-style search.
+/// Legacy-style cooperative agent that broadcasts incident claims and follows peer reports.
+/// Prefer <see cref="CooperativeSearchAgent"/> for new trust experiments.
 /// </summary>
 public sealed class StigmergyAgent : Agent
 {
     private readonly Random _rng;
-    private int _ticksSinceDrop;
+    private int _ticksSinceReport;
 
     /// <summary>
-    /// Creates a stigmergy agent that drops and follows environmental markers.
+    /// Creates an agent that transmits and follows incident report messages.
     /// </summary>
     /// <param name="seed">Optional RNG seed for deterministic exploration; otherwise non-deterministic.</param>
     public StigmergyAgent(int? seed = null)
@@ -22,90 +22,64 @@ public sealed class StigmergyAgent : Agent
         AgentType = "Stigmergy";
         _rng = seed.HasValue ? new Random(seed.Value) : new Random();
         StepSize = 5;
+        FilterToAddressedTraffic = true;
     }
 
-    /// <summary>Minimum ticks between dropping a new marker.</summary>
+    /// <summary>Minimum ticks between report transmissions.</summary>
     public int DropCooldown { get; set; } = 15;
 
-    /// <summary>TTL for markers this agent drops.</summary>
+    /// <summary>TTL for the optional world echo of a transmission (UI/metrics).</summary>
     public int MarkerTtl { get; set; } = 40;
 
     /// <inheritdoc />
     public override AgentAction Decide(AgentObservation observation)
     {
-        _ticksSinceDrop++;
-
-        // Prefer nearest incident if any are visible
         if (observation.NearbyIncidents.Count > 0)
         {
             var nearest = observation.NearbyIncidents
                 .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
                 .First();
-            return DirectionToward(nearest.Position - observation.SelfPosition);
+            return Steering.DirectionToward(nearest.Position - observation.SelfPosition);
         }
 
-        // Otherwise follow nearest marker from other agents
-        var markers = observation.NearbyMessages
-            .Where(m => m.Payload.StartsWith("incident:", StringComparison.Ordinal))
+        var reports = observation.NearbyMessages
+            .Select(m =>
+            {
+                var ok = IncidentMarker.TryParse(m.Payload, out _, out var claimed);
+                return (Ok: ok, Claimed: claimed);
+            })
+            .Where(x => x.Ok)
+            .OrderBy(x => Vec2.Distance(observation.SelfPosition, x.Claimed))
             .ToList();
-        if (markers.Count > 0)
-        {
-            var nearest = markers
-                .OrderBy(m => Vec2.Distance(observation.SelfPosition, m.Position))
-                .First();
-            return DirectionToward(nearest.Position - observation.SelfPosition);
-        }
 
-        // Explore
-        var values = Enum.GetValues<AgentAction>();
-        return values[_rng.Next(values.Length)];
+        if (reports.Count > 0)
+            return Steering.DirectionToward(reports[0].Claimed - observation.SelfPosition);
+
+        return Steering.RandomAction(_rng);
     }
 
-    /// <summary>
-    /// Drops an environmental marker when an incident is visible and cooldown has elapsed, then runs the base tick.
-    /// </summary>
-    /// <param name="ctx">World context for the current tick.</param>
+    /// <inheritdoc />
     public override void Tick(WorldContext ctx)
     {
         var observation = ctx.World.Observe(this);
+        _ticksSinceReport++;
 
-        // Drop a marker if we see an incident and cooldown elapsed
-        if (observation.NearbyIncidents.Count > 0 && _ticksSinceDrop >= DropCooldown)
+        if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= DropCooldown)
         {
             var nearest = observation.NearbyIncidents
                 .OrderBy(i => Vec2.Distance(Position, i.Position))
                 .First();
-            ctx.World.Add(new Message
-            {
-                Position = Position,
-                FromAgentType = AgentType,
-                FromAgentId = Id,
-                Payload = $"incident:{nearest.Id}",
-                Ttl = MarkerTtl
-            });
-            _ticksSinceDrop = 0;
+            ctx.World.Transmit(
+                this,
+                IncidentMarker.Format(nearest.Id, nearest.Position),
+                ttl: MarkerTtl,
+                toAgentId: null);
+            _ticksSinceReport = 0;
         }
 
-        base.Tick(ctx);
-    }
-
-    private static AgentAction DirectionToward(Vec2 delta)
-    {
-        var ax = Math.Abs(delta.X);
-        var ay = Math.Abs(delta.Y);
-        if (ax < 1e-6 && ay < 1e-6) return AgentAction.Stay;
-
-        var sx = Math.Sign(delta.X);
-        var sy = Math.Sign(delta.Y);
-
-        if (ax > ay * 2) return sx > 0 ? AgentAction.East : AgentAction.West;
-        if (ay > ax * 2) return sy > 0 ? AgentAction.South : AgentAction.North;
-
-        if (sx > 0 && sy > 0) return AgentAction.SouthEast;
-        if (sx > 0 && sy < 0) return AgentAction.NorthEast;
-        if (sx < 0 && sy > 0) return AgentAction.SouthWest;
-        if (sx < 0 && sy < 0) return AgentAction.NorthWest;
-        return AgentAction.Stay;
+        LastAction = Decide(observation);
+        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        TotalReward += observation.InstantReward;
     }
 }
 
@@ -116,7 +90,7 @@ public sealed class StigmergyAgentFactory : IAgentFactory
     public string Name => "Stigmergy";
 
     /// <inheritdoc />
-    public string Description => "Drops markers near incidents; follows markers from others.";
+    public string Description => "Broadcasts incident claims; follows peer reports (legacy name).";
 
     /// <inheritdoc />
     public Agent Create(string? label = null) =>
