@@ -43,8 +43,11 @@ public partial class MainViewModel : ObservableObject
         _factories.Register(new CooperativeSearchAgentFactory());
         _factories.Register(new DeceptiveStigmergyAgentFactory());
         _factories.Register(new TrustAwareSearchAgentFactory());
+        _factories.Register(new OrbitingCoopAgentFactory());
+        _factories.Register(new HerdingDeceptiveAgentFactory());
+        _factories.Register(new MitigatedOrbitAgentFactory());
         AgentTypeNames = new ObservableCollection<string>(_factories.Names);
-        SelectedAgentType = "CooperativeSearch";
+        SelectedAgentType = "OrbitingCoop";
 
         _runner.AddWatcher(_coverageWatcher);
         _runner.AddWatcher(_connectivityWatcher);

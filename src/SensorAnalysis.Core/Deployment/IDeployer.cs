@@ -74,4 +74,11 @@ public sealed class DeployRequest
     /// Optional drop-point for Gaussian agent deployment. When null, world center is used.
     /// </summary>
     public Domain.Vec2? DropPoint { get; init; }
+
+    /// <summary>
+    /// When true and adversaries are present, place each incident within an adversary's
+    /// sensor range so infiltrators can act on real events (informed-adversary stress test).
+    /// Ignored when <see cref="AdversaryCount"/> is 0.
+    /// </summary>
+    public bool PlaceIncidentsNearAdversaries { get; init; }
 }

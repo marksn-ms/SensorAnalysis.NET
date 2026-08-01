@@ -80,6 +80,12 @@ public sealed class SimWorld
     /// <param name="message">Message instance to add.</param>
     public void Add(Message message) => _messages.Add(message);
 
+    /// <summary>Lookup an agent by runtime id, or <c>null</c> if not present.</summary>
+    public Agent? FindAgent(int id) => _agents.FirstOrDefault(a => a.Id == id);
+
+    /// <summary>Active (non-depleted) incidents — used by privileged oracles and telemetry.</summary>
+    public IEnumerable<Incident> ActiveIncidents => _incidents.Where(i => !i.IsDepleted);
+
     /// <summary>Removes all agents, incidents, and messages (tiles are retained).</summary>
     public void ClearEntities()
     {
@@ -199,8 +205,13 @@ public sealed class SimWorld
         {
             if (incident.IsDepleted) continue;
             var covering = _agents.Count(a =>
+                a.ContributesToIncidentDrain &&
                 Vec2.Distance(a.Position, incident.Position) <= a.SensorRange);
-            incident.Intensity = Math.Max(0, incident.Intensity - covering * incident.DrainPerAgentPerTick);
+            // Superlinear multi-eye clearance: more honest/mitigated orbiters clear faster.
+            var drain = covering <= 0
+                ? 0
+                : incident.DrainPerAgentPerTick * Math.Pow(covering, incident.MultiAgentDrainExponent);
+            incident.Intensity = Math.Max(0, incident.Intensity - drain);
         }
 
         // 3. Tick messages, drop expired

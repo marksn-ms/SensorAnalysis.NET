@@ -5,8 +5,10 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Agents.Deployers;
 
 /// <summary>
-/// Places agents with a Gaussian footprint about a drop point (aircraft dispersal analogy)
-/// and places incidents uniformly at random. Supports a mixed honest/adversary population.
+/// Honest agents: Gaussian footprint about a drop point (aircraft dispersal).
+/// Adversaries: uniform random over the world (not co-dropped with the swarm).
+/// Incidents: uniform by default so regimes share the same spatial difficulty;
+/// optional near-adversary placement remains available as an explicit stress flag.
 /// </summary>
 public sealed class GaussianDeployer : IDeployer
 {
@@ -15,7 +17,7 @@ public sealed class GaussianDeployer : IDeployer
 
     /// <inheritdoc />
     public string Description =>
-        "Gaussian agent drop about a point; uniform incidents; optional adversary mix.";
+        "Gaussian honest drop; uniform random adversaries; uniform incidents (optional near-adv).";
 
     /// <inheritdoc />
     public void Deploy(SimWorld world, DeployRequest request)
@@ -41,20 +43,38 @@ public sealed class GaussianDeployer : IDeployer
             world.Add(agent);
         }
 
+        var adversaries = new List<Agent>();
         for (int i = 0; i < adversaryCount; i++)
         {
             var agent = request.AdversaryFactory!(request.AgentTypeName);
-            agent.Position = SampleGaussian(rng, drop, sigma, world);
+            // Infiltrators are not part of the aircraft Gaussian drop.
+            agent.Position = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
             agent.SensorRange = request.SensorRange;
             agent.Label = $"{agent.AgentType}-adv-{i}";
             world.Add(agent);
+            adversaries.Add(agent);
         }
 
         for (int i = 0; i < request.IncidentCount; i++)
         {
+            Vec2 pos;
+            if (request.PlaceIncidentsNearAdversaries && adversaries.Count > 0)
+            {
+                var host = adversaries[rng.Next(adversaries.Count)];
+                var radius = host.SensorRange * (0.25 + 0.5 * rng.NextDouble());
+                var angle = rng.NextDouble() * Math.PI * 2;
+                pos = world.Clamp(new Vec2(
+                    host.Position.X + Math.Cos(angle) * radius,
+                    host.Position.Y + Math.Sin(angle) * radius));
+            }
+            else
+            {
+                pos = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
+            }
+
             world.Add(new Incident
             {
-                Position = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h),
+                Position = pos,
                 Intensity = 1.0,
                 Label = $"I-{i}"
             });
@@ -63,7 +83,6 @@ public sealed class GaussianDeployer : IDeployer
 
     private static Vec2 SampleGaussian(Random rng, Vec2 mean, double sigma, SimWorld world)
     {
-        // Box–Muller
         var u1 = 1.0 - rng.NextDouble();
         var u2 = 1.0 - rng.NextDouble();
         var r = Math.Sqrt(-2.0 * Math.Log(u1));

@@ -9,8 +9,13 @@ public class Incident : WorldObject
     /// <summary>Remaining "resources" or intensity. Agents reduce this when nearby.</summary>
     public double Intensity { get; set; } = 1.0;
 
-    /// <summary>How much intensity an agent drains per tick while in range.</summary>
+    /// <summary>How much intensity an agent drains per tick while in range (scaled by multi-agent exponent).</summary>
     public double DrainPerAgentPerTick { get; set; } = 0.01;
+
+    /// <summary>
+    /// Exponent on the number of draining agents. 1 = linear; &gt;1 rewards multiple eyes on an event.
+    /// </summary>
+    public double MultiAgentDrainExponent { get; set; } = 1.5;
 
     /// <summary>True when intensity has been fully drained.</summary>
     public bool IsDepleted => Intensity <= 0;

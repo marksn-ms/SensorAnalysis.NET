@@ -5,10 +5,8 @@ using SensorAnalysis.Core.Messaging;
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Infiltrator that withholds truthful reports and periodically broadcasts decoy incident
-/// claims to lure cooperative agents away from real events. Uses promiscuous receive
-/// (<see cref="Agent.FilterToAddressedTraffic"/> = false) so future directed-traffic
-/// experiments can model eavesdropping.
+/// Informed infiltrator: omniscient of active incident locations, does not help drain them,
+/// withholds truthful reports, and broadcasts decoys far from real events to lure peers away.
 /// </summary>
 public sealed class DeceptiveStigmergyAgent : Agent
 {
@@ -23,30 +21,27 @@ public sealed class DeceptiveStigmergyAgent : Agent
         AgentType = "DeceptiveStigmergy";
         _rng = seed.HasValue ? new Random(seed.Value) : new Random();
         StepSize = 5;
-        FilterToAddressedTraffic = false; // eavesdrop-ready
+        FilterToAddressedTraffic = false;
+        ContributesToIncidentDrain = false;
     }
 
     /// <summary>Ticks between decoy transmissions.</summary>
-    public int DecoyPeriod { get; set; } = 20;
+    public int DecoyPeriod { get; set; } = 12;
 
     /// <summary>TTL for the optional world echo of a transmission (UI/metrics).</summary>
     public int MessageEchoTtl { get; set; } = 50;
 
-    /// <summary>Maximum offset from the agent when inventing a decoy claim.</summary>
-    public double DecoyRadius { get; set; } = 180;
+    /// <summary>
+    /// When true, navigate and place decoys using all active world incidents (privileged intel),
+    /// not only locally sensed ones.
+    /// </summary>
+    public bool OmniscientIncidents { get; set; } = true;
 
     /// <inheritdoc />
     public override AgentAction Decide(AgentObservation observation)
     {
-        // Blend in: pursue visible incidents so presence looks normal, but never report them.
-        if (observation.NearbyIncidents.Count > 0)
-        {
-            var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
-                .First();
-            return Steering.DirectionToward(nearest.Position - observation.SelfPosition);
-        }
-
+        // Stay away from real incidents so we do not crowd-clear them; patrol / wander.
+        // Omniscient path uses Tick to steer using world state after observe.
         return Steering.RandomAction(_rng);
     }
 
@@ -54,16 +49,12 @@ public sealed class DeceptiveStigmergyAgent : Agent
     public override void Tick(WorldContext ctx)
     {
         var observation = ctx.World.Observe(this);
+        var active = ctx.World.Incidents.Where(i => !i.IsDepleted).ToList();
 
         _ticksSinceDecoy++;
         if (_ticksSinceDecoy >= DecoyPeriod)
         {
-            var angle = _rng.NextDouble() * Math.PI * 2;
-            var dist = DecoyRadius * (0.4 + 0.6 * _rng.NextDouble());
-            var claimed = ctx.World.Clamp(new Vec2(
-                Position.X + Math.Cos(angle) * dist,
-                Position.Y + Math.Sin(angle) * dist));
-
+            var claimed = PickDecoyAwayFromIncidents(ctx, active);
             ctx.World.Transmit(
                 this,
                 IncidentMarker.Format(_nextFakeId++, claimed),
@@ -72,9 +63,51 @@ public sealed class DeceptiveStigmergyAgent : Agent
             _ticksSinceDecoy = 0;
         }
 
-        LastAction = Decide(observation);
+        // Move: if omniscient and incidents exist, orbit away from the nearest truth
+        // (keep broadcasting while not helping to clear). Otherwise random walk.
+        if (OmniscientIncidents && active.Count > 0)
+        {
+            var nearest = active
+                .OrderBy(i => Vec2.Distance(Position, i.Position))
+                .First();
+            var away = Position - nearest.Position;
+            if (away.X * away.X + away.Y * away.Y < 1e-6)
+                away = new Vec2(_rng.NextDouble() - 0.5, _rng.NextDouble() - 0.5);
+            LastAction = Steering.DirectionToward(away);
+        }
+        else
+        {
+            LastAction = Decide(observation);
+        }
+
         Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
+    }
+
+    private Vec2 PickDecoyAwayFromIncidents(WorldContext ctx, List<Incident> active)
+    {
+        var w = ctx.World.WorldWidthPx;
+        var h = ctx.World.WorldHeightPx;
+        if (active.Count == 0)
+        {
+            return ctx.World.Clamp(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
+        }
+
+        // Sample candidate claims; prefer points far from every real incident.
+        Vec2 best = Position;
+        var bestScore = double.NegativeInfinity;
+        for (int i = 0; i < 24; i++)
+        {
+            var candidate = new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h);
+            var minDist = active.Min(inc => Vec2.Distance(candidate, inc.Position));
+            if (minDist > bestScore)
+            {
+                bestScore = minDist;
+                best = candidate;
+            }
+        }
+
+        return ctx.World.Clamp(best);
     }
 }
 
@@ -86,7 +119,7 @@ public sealed class DeceptiveStigmergyAgentFactory : IAgentFactory
 
     /// <inheritdoc />
     public string Description =>
-        "Infiltrator: omits true reports and broadcasts decoy incident claims (eavesdrop-ready).";
+        "Informed infiltrator: omniscient decoys, no drain help, eavesdrop-ready.";
 
     /// <inheritdoc />
     public Agent Create(string? label = null) =>

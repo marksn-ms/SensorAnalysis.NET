@@ -4,14 +4,22 @@ using SensorAnalysis.Core.Domain;
 namespace SensorAnalysis.Core.Messaging;
 
 /// <summary>
-/// Shared payload format for incident <em>report messages</em>:
-/// <c>incident:{id}:{x}:{y}</c> where (x,y) is the claimed location.
-/// Used as the opaque <see cref="Message.Payload"/> on radio transmits (not a separate world channel).
+/// Shared payload codecs for incident reports and non-forgeable disappointment gossip.
+/// Disappointment authenticity is enforced by receivers checking the live sender's agent type.
 /// </summary>
 public static class IncidentMarker
 {
     /// <summary>Payload prefix for incident reports.</summary>
     public const string Prefix = "incident:";
+
+    /// <summary>Payload prefix for disappointment / blame gossip.</summary>
+    public const string DisappointmentPrefix = "disappointment:";
+
+    /// <summary>Agent types allowed to emit authentic disappointment gossip.</summary>
+    public static readonly HashSet<string> DisappointmentAuthorTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "MitigatedOrbit"
+    };
 
     /// <summary>Formats a truthful or deceptive incident claim.</summary>
     public static string Format(int incidentId, Vec2 claimedPosition) =>
@@ -38,5 +46,25 @@ public static class IncidentMarker
 
         claimedPosition = new Vec2(x, y);
         return true;
+    }
+
+    /// <summary>Formats disappointment gossip naming an accused sender.</summary>
+    public static string FormatDisappointment(int accusedAgentId, string reason) =>
+        $"{DisappointmentPrefix}{accusedAgentId}:{reason}";
+
+    /// <summary>Attempts to parse disappointment gossip.</summary>
+    public static bool TryParseDisappointment(string payload, out int accusedAgentId, out string reason)
+    {
+        accusedAgentId = 0;
+        reason = "";
+        if (string.IsNullOrEmpty(payload) ||
+            !payload.StartsWith(DisappointmentPrefix, StringComparison.Ordinal))
+            return false;
+
+        var rest = payload[DisappointmentPrefix.Length..];
+        var idx = rest.IndexOf(':');
+        var idPart = idx < 0 ? rest : rest[..idx];
+        reason = idx < 0 ? "" : rest[(idx + 1)..];
+        return int.TryParse(idPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out accusedAgentId);
     }
 }

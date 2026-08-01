@@ -47,6 +47,12 @@ public class Agent : WorldObject
     /// </summary>
     public string AgentType { get; init; } = "Agent";
 
+    /// <summary>
+    /// When true (default), this agent drains incident intensity while in range.
+    /// Set false for infiltrators that should not help clear events.
+    /// </summary>
+    public bool ContributesToIncidentDrain { get; set; } = true;
+
     /// <summary>Effective transmit/receive range for radio messages.</summary>
     public double EffectiveCommRange => CommRange ?? SensorRange;
 

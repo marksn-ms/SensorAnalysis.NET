@@ -4,26 +4,29 @@
 
 Designed for research workflows: watch agents interact on a world canvas, step or batch-run experiments, and export metrics/logs suitable for publication analysis.
 
+Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, deception, and reputation experiments.
+
 > Modern rewrite of the classic [marksn-ms/SensorAnalysis](https://github.com/marksn-ms/SensorAnalysis) WinForms platform — same goals, current .NET stack.
 
 ## Highlights
 
 - **WPF world view** — pan, zoom, select agents/incidents, live metrics panel
-- **In-process agents** — implement `Agent.Decide`, register via `IAgentFactory` (no RPC required)
-- **Watchers** — sample coverage, connectivity, rewards every tick
-- **Experiment export** — `run-meta.json` + `metrics.csv` per run (ready for R / Python / Excel)
-- **Headless CLI** — batch trials without opening the GUI
-- **Deterministic** — fixed seed → reproducible trajectories
+- **In-process agents** — implement `Agent.Decide` / `Tick`, register via `IAgentFactory`
+- **Radio messaging** — `SimWorld.Transmit` delivers to in-range **inboxes** (broadcast = empty `ToAgentId`)
+- **Watchers** — coverage, connectivity, clearance, trust telemetry
+- **Experiment export** — `run-meta.json` + `metrics.csv` per run
+- **Headless CLI** — multi-regime batches (`--regime honest|deceptive|mitigated|…`)
+- **Deterministic seeds** — fixed base seed + trial index
 
 ## Solution layout
 
 | Project | Role |
 |---------|------|
-| `SensorAnalysis.Core` | World, agents, incidents, messages, watchers, export |
-| `SensorAnalysis.Agents` | Built-in strategies, deployers, extra watchers |
-| `SensorAnalysis.App` | WPF UI (primary surface) |
+| `SensorAnalysis.Core` | World, agents, incidents, messages, intel oracle, export |
+| `SensorAnalysis.Agents` | Strategies, `GaussianDeployer`, watchers |
+| `SensorAnalysis.App` | WPF UI |
 | `SensorAnalysis.Cli` | Headless batch runner |
-| `SensorAnalysis.Core.Tests` | Unit tests (determinism, sensing, export) |
+| `SensorAnalysis.Core.Tests` | Unit tests |
 
 ## Quick start
 
@@ -36,8 +39,8 @@ Designed for research workflows: watch agents interact on a world canvas, step o
 
 ```bash
 dotnet restore
-dotnet build
-dotnet test
+dotnet build -c Release
+dotnet test -c Release
 ```
 
 ### Run the GUI
@@ -46,61 +49,110 @@ dotnet test
 dotnet run --project src/SensorAnalysis.App
 ```
 
-1. **Deploy** — set agent count / type / incidents, click Deploy  
-2. **Step** or **Run** — advance the simulation; watch the canvas  
-3. Click an agent to see sensor range and properties  
-4. **File → Export Metrics** or **Simulation → Run Experiment** for CSV + JSON  
-
-### Headless batch (publication data)
+### Publish CLI next to the Trust paper repo
 
 ```bash
-dotnet run --project src/SensorAnalysis.Cli -- \
-  --trials 10 --ticks 500 --agents 20 --incidents 8 \
-  --agent-type GreedyIncident --seed 42 \
-  --out ./experiments/greedy-vs-coverage
+dotnet publish src/SensorAnalysis.Cli/SensorAnalysis.Cli.csproj -c Release -o ../Trust/SensorAnalysis
 ```
 
-Output folder:
+Trust overnight scripts prefer `Trust/SensorAnalysis/SensorAnalysis.Cli.exe` (the WPF `App.exe` alone cannot run headless batches).
 
+## Headless CLI
+
+```bash
+dotnet run --project src/SensorAnalysis.Cli -c Release -- \
+  --regime honest --trials 100 --ticks 1000 \
+  --agents 8 --incidents 6 --adversaries 0 \
+  --cols 10 --rows 10 --tile-px 40 \
+  --sensor-range 80 --sigma 80 --seed 42 \
+  --out ./experiments/honest
 ```
-experiments/greedy-vs-coverage/
-  run-meta.json    # scenario, seeds, agent types, counts
-  metrics.csv      # time series from all watchers
-```
+
+### Regimes
+
+| `--regime` | Honest slots | Adversaries |
+|------------|--------------|-------------|
+| `random` | `RandomWalk` | — |
+| `greedy` | `GreedyIncident` | — |
+| `honest` | `OrbitingCoop` | — |
+| `deceptive` | `OrbitingCoop` | `HerdingDeceptive` × `--adversaries` |
+| `mitigated` | `MitigatedOrbit` | `HerdingDeceptive` × `--adversaries` |
+| `legacy-honest` / `legacy-deceptive` / `legacy-mitigated` | Older simple agents retained for reference | |
+
+### Useful flags
+
+| Flag | Meaning |
+|------|---------|
+| `--cols` / `--rows` / `--tile-px` | World grid (default 10×10×40) |
+| `--sensor-range` | Sense / default radio range |
+| `--sigma` | Gaussian drop σ for **honest** agents |
+| `--adversaries` | Count of infiltrators (deceptive/mitigated) |
+| `--incidents-near-adversaries` | Optional stress flag (off by default; keep incident process identical across regimes) |
+
+CLI prints an approximate disk-cover scale `n*` (sparse ≈ agents ≪ `n*`).
 
 ## Built-in agent types
 
+### Trust-paper stack (current defaults)
+
 | Name | Behavior |
 |------|----------|
-| `RandomWalk` | Uniform random direction each tick |
-| `GreedyIncident` | Move toward nearest visible incident; wander otherwise |
-| `Stigmergy` | Drops markers near incidents; follows markers from others |
+| `OrbitingCoop` | Personal-space exploration; on find/join, **orbit clockwise at r/2**; bird-in-hand join; truthful broadcasts; contributes to drain |
+| `HerdingDeceptive` | Uniform-random deploy; **`IIncidentOracle`** omniscience; **no drain**; silence on truth; far decoys; herds by occupying personal space toward known events |
+| `MitigatedOrbit` | Orbiting coop + Beta–Bernoulli trust; silence detection; false-lure disappointment; **authenticated disappointment gossip** (receivers accept only live `MitigatedOrbit` senders) |
 
-Add your own: subclass `Agent`, override `Decide`, register an `IAgentFactory`.
+### Simpler / legacy reference
 
-## Scenarios & frames
+| Name | Behavior |
+|------|----------|
+| `RandomWalk` | Random heading |
+| `GreedyIncident` | Chase nearest visible incident |
+| `Stigmergy` | Radio incident claims (legacy naming) |
+| `CooperativeSearch` | Persist-explore + follow claims |
+| `DeceptiveStigmergy` | Earlier decoy-only infiltrator |
+| `TrustAwareSearch` | Earlier claim-verify trust filter |
 
-- **File → Open/Save Scenario** — JSON placements (`samples/scenarios/demo.json`)
-- **Record frames** checkbox — while Running, writes `experiments/frames-*/tick-NNNNNN.png`
-- **File → Capture Frame** — single PNG of the current view
-- Reward model: incident proximity, crowding penalty, first-coverage bonus (`RewardModel`)
+Add your own: subclass `Agent`, override `Tick`/`Decide`, register an `IAgentFactory`.
 
-## Concepts (mapped from the classic platform)
+## World mechanics (current)
+
+- **Incidents** — intensity drained each tick by agents with `ContributesToIncidentDrain` in range. Drain scales **superlinearly**: `DrainPerAgentPerTick * covering^MultiAgentDrainExponent` (default exponent 1.5).
+- **Messages** — `Transmit` enqueues inbox snapshots for in-range peers; optional short world echo for UI/metrics. Honest filter: broadcast (`ToAgentId == null`) or addressed to self; adversaries can disable filtering (eavesdrop-ready).
+- **Deployment (`GaussianDeployer`)** — honest agents: Gaussian about drop point; **adversaries: uniform random**; incidents: uniform unless `--incidents-near-adversaries`.
+- **Intel** — `IIncidentOracle` / `WorldIncidentOracle` injects privileged incident lists into deceptive agents without hard-coding IDs in the tick loop.
+
+## Watchers & export
+
+| Watcher | Columns (prefix) |
+|---------|------------------|
+| `Coverage` | coverage, active incidents, reward, messages |
+| `Connectivity` | pair counts / degree |
+| `Clearance` | fraction cleared, all-clear tick (end-of-trial sentinel `tick=-1`) |
+| `TrustTel` | fraction cleared over time, mean mitigated trust vs deceptive peers, disappointment echo counts |
+
+Export folder:
+
+```
+out/
+  run-meta.json
+  metrics.csv
+```
+
+## Concepts (classic → modern)
 
 | Classic | Modern |
 |---------|--------|
-| `World` / `WorldControl` | `SimWorld` + WPF `WorldCanvas` |
 | `Inhabitant` | `Agent` |
 | `Incident` | `Incident` |
-| `Marker` / messages | `Message` |
-| `Deployer` | `IDeployer` |
+| `Marker` / messages | `Message` + inbox `Transmit` |
+| `Deployer` | `IDeployer` / `GaussianDeployer` |
 | `Watcher` | `IWatcher` + `ExperimentExporter` |
-| `app.config` agent list | `AgentFactoryRegistry` |
 
 ## Documentation
 
 - [docs/DeveloperGuide.md](docs/DeveloperGuide.md) — add agents, deployers, watchers
-- [docs/ExperimentExport.md](docs/ExperimentExport.md) — CSV/JSON schema for analysis
+- [docs/ExperimentExport.md](docs/ExperimentExport.md) — CSV/JSON schema
+- Sibling paper workflow: `../Trust/README.md`
 
 ## License
 
