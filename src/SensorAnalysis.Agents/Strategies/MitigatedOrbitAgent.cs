@@ -62,7 +62,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         MaybeBroadcast(ctx, observation);
 
         LastAction = ChooseAction(observation, personalSpace);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
 
         if (CommittedIncidentId is int id &&
@@ -96,8 +96,8 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
                 continue;
 
             var othersCloser = observation.NearbyAgents.Count(a =>
-                Vec2.Distance(a.Position, claimed) + 1e-6 <
-                Vec2.Distance(observation.SelfPosition, claimed));
+                Vec2.ToroidalDistance(a.Position, claimed, observation.WorldWidth, observation.WorldHeight) + 1e-6 <
+                observation.DistanceTo(claimed));
             if (othersCloser >= MaxOthersCloserToJoin)
                 continue;
 
@@ -114,7 +114,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         var probe = _pending.Value;
 
         var confirmed = observation.NearbyIncidents.Any(i =>
-            Vec2.Distance(i.Position, probe.Claimed) <= VerifyRadius);
+            Vec2.ToroidalDistance(i.Position, probe.Claimed, observation.WorldWidth, observation.WorldHeight) <= VerifyRadius);
 
         if (confirmed)
         {
@@ -123,7 +123,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             return;
         }
 
-        var nearClaim = Vec2.Distance(observation.SelfPosition, probe.Claimed) <= VerifyRadius;
+        var nearClaim = observation.DistanceTo(probe.Claimed) <= VerifyRadius;
         if (nearClaim && observation.NearbyIncidents.Count == 0)
         {
             // Arrived; nothing here — disappointment.
@@ -147,7 +147,8 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         var present = new HashSet<int>();
         foreach (var peer in observation.NearbyAgents)
         {
-            var peerInRangeOfEvent = Vec2.Distance(peer.Position, CommittedPosition) <= SensorRange;
+            var peerInRangeOfEvent = Vec2.ToroidalDistance(
+                peer.Position, CommittedPosition, observation.WorldWidth, observation.WorldHeight) <= SensorRange;
             if (!peerInRangeOfEvent) continue;
             present.Add(peer.Id);
             _coPresentTicks[peer.Id] = _coPresentTicks.GetValueOrDefault(peer.Id) + 1;

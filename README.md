@@ -10,7 +10,9 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 
 ## Highlights
 
-- **WPF world view** — pan, zoom, select agents/incidents, live metrics panel
+- **WPF world view** — pan, zoom, select agents/incidents; type-colored markers (circles / diamonds / triangles)
+- **Directive log** — schedule deployments by tick (Gaussian/Random, mixed agent types); inject while paused
+- **Live metrics** — pin inherent stats or registered watcher columns; sparklines vs tick
 - **In-process agents** — implement `Agent.Decide` / `Tick`, register via `IAgentFactory`
 - **Radio messaging** — `SimWorld.Transmit` delivers to in-range **inboxes** (broadcast = empty `ToAgentId`)
 - **Watchers** — coverage, connectivity, clearance, trust telemetry
@@ -24,7 +26,7 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 |---------|------|
 | `SensorAnalysis.Core` | World, agents, incidents, messages, intel oracle, export |
 | `SensorAnalysis.Agents` | Strategies, `GaussianDeployer`, watchers |
-| `SensorAnalysis.App` | WPF UI |
+| `SensorAnalysis.App` | WPF UI (directives, live metrics, entity visuals) |
 | `SensorAnalysis.Cli` | Headless batch runner |
 | `SensorAnalysis.Core.Tests` | Unit tests |
 
@@ -48,6 +50,14 @@ dotnet test -c Release
 ```bash
 dotnet run --project src/SensorAnalysis.App
 ```
+
+Typical interactive flow:
+
+1. Edit the **Environment directives** draft (deployer, agent/adversary types & counts, incidents) → **Add to log** / **Apply due**
+2. **Run** or **Step** — due directives at `AtTick <= CurrentTick` apply automatically before each tick
+3. Pause (**Stop**) to **Apply now** mid-run (e.g. inject more agents at the current tick)
+4. Use **+** under Live metrics to pin inherent fields or watcher columns; sparklines plot vs tick
+5. **Legend** lists colors/shapes for agent and incident types currently in the world
 
 ### Publish CLI next to the Trust paper repo
 
@@ -113,9 +123,22 @@ CLI prints an approximate disk-cover scale `n*` (sparse ≈ agents ≪ `n*`).
 | `TrustAwareSearch` | Earlier claim-verify trust filter |
 
 Add your own: subclass `Agent`, override `Tick`/`Decide`, register an `IAgentFactory`.
+Register a canvas style in the App with `EntityVisualCatalog.Default.RegisterAgent(...)` (optional — unknown types get a stable hash color).
+
+## GUI visuals
+
+| Entity | Default cue |
+|--------|-------------|
+| Cooperative / baseline agents | Colored **circles** (by `Agent.AgentType`) |
+| Deceptive / infiltrator agents | Colored **diamonds** |
+| Incidents | Colored **triangles** (by `Incident.IncidentType`) |
+| Message echoes | Small lime dots |
+
+Styles live in `SensorAnalysis.App.Visualization` so Core/CLI stay UI-free. New factories appear automatically via hash colors until you register a curated palette.
 
 ## World mechanics (current)
 
+- **Topology** — **toroidal** (classic open world): leaving one edge enters the opposite edge. Sensing, radio, connectivity, drain, and steering use shortest-path distance on the torus. Soft “walls” can be modeled later as fixed inhabitants + collision avoidance rather than hard clamps.
 - **Incidents** — intensity drained each tick by agents with `ContributesToIncidentDrain` in range. Drain scales **superlinearly**: `DrainPerAgentPerTick * covering^MultiAgentDrainExponent` (default exponent 1.5).
 - **Messages** — `Transmit` enqueues inbox snapshots for in-range peers; optional short world echo for UI/metrics. Honest filter: broadcast (`ToAgentId == null`) or addressed to self; adversaries can disable filtering (eavesdrop-ready).
 - **Deployment (`GaussianDeployer`)** — honest agents: Gaussian about drop point; **adversaries: uniform random**; incidents: uniform unless `--incidents-near-adversaries`.

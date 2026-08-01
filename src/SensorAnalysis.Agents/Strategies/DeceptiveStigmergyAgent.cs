@@ -68,9 +68,9 @@ public sealed class DeceptiveStigmergyAgent : Agent
         if (OmniscientIncidents && active.Count > 0)
         {
             var nearest = active
-                .OrderBy(i => Vec2.Distance(Position, i.Position))
+                .OrderBy(i => ctx.World.Distance(Position, i.Position))
                 .First();
-            var away = Position - nearest.Position;
+            var away = ctx.World.Displacement(nearest.Position, Position);
             if (away.X * away.X + away.Y * away.Y < 1e-6)
                 away = new Vec2(_rng.NextDouble() - 0.5, _rng.NextDouble() - 0.5);
             LastAction = Steering.DirectionToward(away);
@@ -80,7 +80,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
             LastAction = Decide(observation);
         }
 
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 
@@ -90,7 +90,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
         var h = ctx.World.WorldHeightPx;
         if (active.Count == 0)
         {
-            return ctx.World.Clamp(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
+            return ctx.World.Wrap(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
         }
 
         // Sample candidate claims; prefer points far from every real incident.
@@ -99,7 +99,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
         for (int i = 0; i < 24; i++)
         {
             var candidate = new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h);
-            var minDist = active.Min(inc => Vec2.Distance(candidate, inc.Position));
+            var minDist = active.Min(inc => ctx.World.Distance(candidate, inc.Position));
             if (minDist > bestScore)
             {
                 bestScore = minDist;
@@ -107,7 +107,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
             }
         }
 
-        return ctx.World.Clamp(best);
+        return ctx.World.Wrap(best);
     }
 }
 

@@ -22,7 +22,7 @@ public sealed class GaussianDeployer : IDeployer
     /// <inheritdoc />
     public void Deploy(SimWorld world, DeployRequest request)
     {
-        var rng = new Random(world.Seed);
+        var rng = new Random(unchecked(world.Seed ^ request.RandomSalt));
         var w = world.WorldWidthPx;
         var h = world.WorldHeightPx;
         var drop = request.DropPoint ?? new Vec2(w / 2.0, h / 2.0);
@@ -63,7 +63,7 @@ public sealed class GaussianDeployer : IDeployer
                 var host = adversaries[rng.Next(adversaries.Count)];
                 var radius = host.SensorRange * (0.25 + 0.5 * rng.NextDouble());
                 var angle = rng.NextDouble() * Math.PI * 2;
-                pos = world.Clamp(new Vec2(
+                pos = world.Wrap(new Vec2(
                     host.Position.X + Math.Cos(angle) * radius,
                     host.Position.Y + Math.Sin(angle) * radius));
             }
@@ -88,6 +88,6 @@ public sealed class GaussianDeployer : IDeployer
         var r = Math.Sqrt(-2.0 * Math.Log(u1));
         var theta = 2.0 * Math.PI * u2;
         var p = new Vec2(mean.X + r * Math.Cos(theta) * sigma, mean.Y + r * Math.Sin(theta) * sigma);
-        return world.Clamp(p);
+        return world.Wrap(p);
     }
 }

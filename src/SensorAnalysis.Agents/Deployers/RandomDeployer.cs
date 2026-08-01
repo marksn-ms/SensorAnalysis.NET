@@ -16,16 +16,30 @@ public sealed class RandomDeployer : IDeployer
     /// <inheritdoc />
     public void Deploy(SimWorld world, DeployRequest request)
     {
-        var rng = new Random(world.Seed);
+        var rng = new Random(unchecked(world.Seed ^ request.RandomSalt));
         var w = world.WorldWidthPx;
         var h = world.WorldHeightPx;
 
-        for (int i = 0; i < request.AgentCount; i++)
+        var adversaryCount = Math.Clamp(request.AdversaryCount, 0, request.AgentCount);
+        var honestCount = request.AgentCount - adversaryCount;
+        if (adversaryCount > 0 && request.AdversaryFactory is null)
+            throw new InvalidOperationException("AdversaryFactory is required when AdversaryCount > 0.");
+
+        for (int i = 0; i < honestCount; i++)
         {
             var agent = request.AgentFactory(request.AgentTypeName);
             agent.Position = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
             agent.SensorRange = request.SensorRange;
             agent.Label = $"{agent.AgentType}-{i}";
+            world.Add(agent);
+        }
+
+        for (int i = 0; i < adversaryCount; i++)
+        {
+            var agent = request.AdversaryFactory!(request.AgentTypeName);
+            agent.Position = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
+            agent.SensorRange = request.SensorRange;
+            agent.Label = $"{agent.AgentType}-adv-{i}";
             world.Add(agent);
         }
 

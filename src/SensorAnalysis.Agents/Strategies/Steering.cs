@@ -30,10 +30,10 @@ internal static class Steering
         return values[rng.Next(values.Length)];
     }
 
-    /// <summary>Clockwise tangent step about <paramref name="center"/> at preferred radius.</summary>
-    public static AgentAction OrbitClockwise(Vec2 self, Vec2 center, double radius)
+    /// <summary>Clockwise tangent step about <paramref name="center"/> at preferred radius (toroidal).</summary>
+    public static AgentAction OrbitClockwise(Vec2 self, Vec2 center, double radius, double worldWidth, double worldHeight)
     {
-        var offset = self - center;
+        var offset = Vec2.ToroidalDisplacement(center, self, worldWidth, worldHeight);
         var dist = offset.Length;
         if (dist < 1e-6)
             return AgentAction.East;
@@ -42,12 +42,13 @@ internal static class Steering
         // Clockwise tangent in screen coords (Y down): (x,y) -> (-y, x) is CCW; (y, -x) is CW.
         var tangent = new Vec2(radial.Y, -radial.X);
         var desired = center + radial * radius + tangent * Math.Max(radius * 0.35, 4);
-        return DirectionToward(desired - self);
+        desired = Vec2.Wrap(desired, worldWidth, worldHeight);
+        return DirectionToward(Vec2.ToroidalDisplacement(self, desired, worldWidth, worldHeight));
     }
 
     /// <summary>
     /// Persist heading when free; otherwise pick a free-ish direction that increases clearance
-    /// from neighbors inside personal space.
+    /// from neighbors inside personal space (toroidal distances).
     /// </summary>
     public static AgentAction ExploreWithPersonalSpace(
         Vec2 self,
@@ -55,16 +56,18 @@ internal static class Steering
         int persistTicksRemaining,
         IReadOnlyList<AgentInfo> neighbors,
         double personalSpace,
+        double worldWidth,
+        double worldHeight,
         Random rng,
         out AgentAction newHeading,
         out int newPersist)
     {
         bool Crowded(Vec2 at) =>
-            neighbors.Any(n => Vec2.Distance(at, n.Position) < personalSpace);
+            neighbors.Any(n => Vec2.ToroidalDistance(at, n.Position, worldWidth, worldHeight) < personalSpace);
 
         if (persistTicksRemaining > 0 && currentHeading != AgentAction.Stay)
         {
-            var step = self + currentHeading.ToStep() * 5;
+            var step = Vec2.Wrap(self + currentHeading.ToStep() * 5, worldWidth, worldHeight);
             if (!Crowded(step))
             {
                 newHeading = currentHeading;
@@ -80,10 +83,10 @@ internal static class Steering
         {
             var h = RandomAction(rng);
             if (h == AgentAction.Stay) continue;
-            var next = self + h.ToStep() * 5;
+            var next = Vec2.Wrap(self + h.ToStep() * 5, worldWidth, worldHeight);
             var minDist = neighbors.Count == 0
                 ? personalSpace
-                : neighbors.Min(n => Vec2.Distance(next, n.Position));
+                : neighbors.Min(n => Vec2.ToroidalDistance(next, n.Position, worldWidth, worldHeight));
             if (minDist > bestScore)
             {
                 bestScore = minDist;

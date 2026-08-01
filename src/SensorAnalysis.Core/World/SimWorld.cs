@@ -94,22 +94,35 @@ public sealed class SimWorld
         _messages.Clear();
     }
 
-    /// <summary>Clamps a point to the inclusive world bounds.</summary>
+    /// <summary>
+    /// Wraps a point onto the toroidal world (leaving one edge enters the opposite edge).
+    /// </summary>
     /// <param name="p">Point in world coordinates.</param>
-    /// <returns>A point guaranteed to lie inside the world.</returns>
-    public Vec2 Clamp(Vec2 p) => new(
-        Math.Clamp(p.X, 0, WorldWidthPx - 1),
-        Math.Clamp(p.Y, 0, WorldHeightPx - 1));
+    /// <returns>Equivalent point inside <c>[0, width) × [0, height)</c>.</returns>
+    public Vec2 Wrap(Vec2 p) => Vec2.Wrap(p, WorldWidthPx, WorldHeightPx);
 
-    /// <summary>Returns the tile containing <paramref name="p"/>, or <c>null</c> if out of bounds.</summary>
+    /// <summary>Shortest distance between two points on this toroidal world.</summary>
+    /// <param name="a">First point.</param>
+    /// <param name="b">Second point.</param>
+    /// <returns>Toroidal distance in world units.</returns>
+    public double Distance(Vec2 a, Vec2 b) =>
+        Vec2.ToroidalDistance(a, b, WorldWidthPx, WorldHeightPx);
+
+    /// <summary>Shortest signed displacement from <paramref name="from"/> to <paramref name="to"/> on this torus.</summary>
+    /// <param name="from">Origin.</param>
+    /// <param name="to">Destination.</param>
+    /// <returns>Minimum-image displacement vector.</returns>
+    public Vec2 Displacement(Vec2 from, Vec2 to) =>
+        Vec2.ToroidalDisplacement(from, to, WorldWidthPx, WorldHeightPx);
+
+    /// <summary>Returns the tile containing <paramref name="p"/> (coordinates are wrapped first).</summary>
     /// <param name="p">Point in world coordinates.</param>
-    /// <returns>The containing <see cref="Tile"/>, or <c>null</c>.</returns>
-    public Tile? TileAt(Vec2 p)
+    /// <returns>The containing <see cref="Tile"/>.</returns>
+    public Tile TileAt(Vec2 p)
     {
-        var col = (int)(p.X / Options.TileSizePx.Width);
-        var row = (int)(p.Y / Options.TileSizePx.Height);
-        if (col < 0 || row < 0 || col >= Options.TileCount.Width || row >= Options.TileCount.Height)
-            return null;
+        p = Wrap(p);
+        var col = Math.Min(Options.TileCount.Width - 1, (int)(p.X / Options.TileSizePx.Width));
+        var row = Math.Min(Options.TileCount.Height - 1, (int)(p.Y / Options.TileSizePx.Height));
         return _tiles[col, row];
     }
 
@@ -120,12 +133,12 @@ public sealed class SimWorld
     {
         var range = self.SensorRange;
         var nearbyAgents = _agents
-            .Where(a => a.Id != self.Id && Vec2.Distance(a.Position, self.Position) <= range)
+            .Where(a => a.Id != self.Id && Distance(a.Position, self.Position) <= range)
             .Select(a => new AgentInfo(a.Id, a.Position, a.AgentType))
             .ToList();
 
         var nearbyIncidents = _incidents
-            .Where(i => !i.IsDepleted && Vec2.Distance(i.Position, self.Position) <= range)
+            .Where(i => !i.IsDepleted && Distance(i.Position, self.Position) <= range)
             .Select(i => new IncidentInfo(i.Id, i.Position, i.Intensity))
             .ToList();
 
@@ -136,6 +149,8 @@ public sealed class SimWorld
         {
             Tick = CurrentTick,
             SelfPosition = self.Position,
+            WorldWidth = WorldWidthPx,
+            WorldHeight = WorldHeightPx,
             NearbyAgents = nearbyAgents,
             NearbyIncidents = nearbyIncidents,
             NearbyMessages = nearbyMessages,
@@ -180,7 +195,7 @@ public sealed class SimWorld
         foreach (var agent in _agents)
         {
             if (agent.Id == sender.Id) continue;
-            if (Vec2.Distance(agent.Position, sender.Position) > range) continue;
+            if (Distance(agent.Position, sender.Position) > range) continue;
             agent.Receive(info);
         }
     }
@@ -206,7 +221,7 @@ public sealed class SimWorld
             if (incident.IsDepleted) continue;
             var covering = _agents.Count(a =>
                 a.ContributesToIncidentDrain &&
-                Vec2.Distance(a.Position, incident.Position) <= a.SensorRange);
+                Distance(a.Position, incident.Position) <= a.SensorRange);
             // Superlinear multi-eye clearance: more honest/mitigated orbiters clear faster.
             var drain = covering <= 0
                 ? 0
@@ -223,8 +238,7 @@ public sealed class SimWorld
         foreach (var agent in _agents)
         {
             var tile = TileAt(agent.Position);
-            if (tile is not null)
-                tile.LastCoveredTick = CurrentTick;
+            tile.LastCoveredTick = CurrentTick;
         }
 
         CurrentTick++;

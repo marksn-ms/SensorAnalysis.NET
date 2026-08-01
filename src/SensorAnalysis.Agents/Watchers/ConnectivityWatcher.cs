@@ -43,7 +43,7 @@ public sealed class ConnectivityWatcher : IWatcher
         for (int j = i + 1; j < agents.Count; j++)
         {
             var range = Math.Min(agents[i].SensorRange, agents[j].SensorRange);
-            if (Vec2.Distance(agents[i].Position, agents[j].Position) <= range)
+            if (world.Distance(agents[i].Position, agents[j].Position) <= range)
                 edges++;
         }
 

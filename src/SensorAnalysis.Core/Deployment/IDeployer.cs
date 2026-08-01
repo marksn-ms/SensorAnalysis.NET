@@ -81,4 +81,10 @@ public sealed class DeployRequest
     /// Ignored when <see cref="AdversaryCount"/> is 0.
     /// </summary>
     public bool PlaceIncidentsNearAdversaries { get; init; }
+
+    /// <summary>
+    /// Optional salt mixed into the deployer RNG seed. Default 0 (unchanged CLI/Trust behavior).
+    /// Useful for additive mid-run deployments so placements do not repeat the initial pattern.
+    /// </summary>
+    public int RandomSalt { get; init; }
 }

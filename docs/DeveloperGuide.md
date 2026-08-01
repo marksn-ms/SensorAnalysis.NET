@@ -30,6 +30,17 @@ Register in the GUI / CLI startup:
 registry.Register(new MySearchAgentFactory());
 ```
 
+Optionally give the WPF canvas a distinct marker (App layer only):
+
+```csharp
+EntityVisualCatalog.Default.RegisterAgent(
+    new EntityVisualStyle("MySearch", EntityMarkerShape.Square, 90, 160, 200));
+```
+
+Unknown agent/incident type names still render with a stable hash-based pastel color.
+
+Incidents may set `IncidentType` (default `"Incident"`) so different event kinds use different triangle colors via `RegisterIncident`.
+
 ## Adding a watcher
 
 Implement `IWatcher`, append rows in `OnTick`, declare `ColumnNames`.  
@@ -44,7 +55,8 @@ Implement `IDeployer.Deploy(SimWorld, DeployRequest)` and place agents/incidents
 - Construct `SimWorld` with a fixed `seed`.
 - Prefer seeded `Random` inside agents when randomness is required.
 - Avoid wall-clock time and unordered parallelism in `Decide`.
+- The world is **toroidal**: use `world.Wrap` / `world.Distance` (or `observation.DistanceTo` / `DisplacementTo`) rather than Euclidean deltas across edges.
 
 ## Headless vs GUI
 
-Both use `SimulationRunner`. The GUI drives it from a `DispatcherTimer`; the CLI calls `RunExperiment` and writes the export folder.
+Both use `SimulationRunner`. The GUI drives it from a `DispatcherTimer` and applies an **environment directive** log (tick-scheduled deployments) without encoding paper “regimes.” The CLI calls `RunExperiment` with regime helpers and writes the export folder.

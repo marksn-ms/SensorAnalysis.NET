@@ -46,17 +46,34 @@ public class SimWorldTests
         w1.Agents[1].Position.Should().Be(w2.Agents[1].Position);
     }
 
-    /// <summary>Verifies <see cref="SimWorld.Clamp"/> keeps coordinates inside world bounds.</summary>
+    /// <summary>Verifies <see cref="SimWorld.Wrap"/> maps out-of-range coordinates onto the torus.</summary>
     [Fact]
-    public void Clamp_KeepsAgentsInsideWorld()
+    public void Wrap_MapsCoordinatesOntoToroidalWorld()
     {
         var w = CreateWorld();
-        var agent = new Agent { Position = new Vec2(10, 10), StepSize = 100 };
-        // Force a huge step westward via Stay then manual position
-        w.Add(agent);
-        agent.Position = w.Clamp(new Vec2(-50, -50));
-        agent.Position.X.Should().BeGreaterThanOrEqualTo(0);
-        agent.Position.Y.Should().BeGreaterThanOrEqualTo(0);
+        // World is 200×200; -50 wraps to 150.
+        var wrapped = w.Wrap(new Vec2(-50, -50));
+        wrapped.X.Should().BeApproximately(150, 1e-9);
+        wrapped.Y.Should().BeApproximately(150, 1e-9);
+
+        w.Wrap(new Vec2(200, 0)).X.Should().BeApproximately(0, 1e-9);
+    }
+
+    /// <summary>Verifies sensing uses shortest toroidal distance across world edges.</summary>
+    [Fact]
+    public void Observe_SeesEntitiesAcrossToroidalEdge()
+    {
+        var w = CreateWorld(); // 200×200
+        var self = new Agent { Position = new Vec2(5, 100), SensorRange = 20 };
+        w.Add(self);
+        // Just across the left/right seam from self (near x=0 ↔ x=200).
+        w.Add(new Agent { Position = new Vec2(195, 100) });
+        w.Add(new Incident { Position = new Vec2(198, 100) });
+
+        var obs = w.Observe(self);
+        obs.NearbyAgents.Should().HaveCount(1);
+        obs.NearbyIncidents.Should().HaveCount(1);
+        w.Distance(self.Position, new Vec2(195, 100)).Should().BeApproximately(10, 1e-9);
     }
 
     /// <summary>Verifies observations only include entities within the agent's sensor range.</summary>
@@ -67,9 +84,9 @@ public class SimWorldTests
         var self = new Agent { Position = new Vec2(50, 50), SensorRange = 30 };
         w.Add(self);
         w.Add(new Agent { Position = new Vec2(55, 55) }); // near
-        w.Add(new Agent { Position = new Vec2(200, 200) }); // far
+        w.Add(new Agent { Position = new Vec2(200, 200) }); // far on torus (~70)
         w.Add(new Incident { Position = new Vec2(60, 50) }); // near
-        w.Add(new Incident { Position = new Vec2(300, 300) }); // far
+        w.Add(new Incident { Position = new Vec2(150, 150) }); // far
 
         var obs = w.Observe(self);
         obs.NearbyAgents.Should().HaveCount(1);

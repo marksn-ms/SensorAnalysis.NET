@@ -59,13 +59,13 @@ public sealed class TrustAwareSearchAgent : Agent
         if (observation.NearbyIncidents.Count > 0)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
-            return Steering.DirectionToward(nearest.Position - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(nearest.Position));
         }
 
         if (_pending is { } probe)
-            return Steering.DirectionToward(probe.Claimed - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(probe.Claimed));
 
         var candidates = observation.NearbyMessages
             .Where(m => m.FromAgentId is int sid && sid != Id)
@@ -76,14 +76,14 @@ public sealed class TrustAwareSearchAgent : Agent
             })
             .Where(x => x.Ok && MeanTrust(x.Sender) >= TrustThreshold)
             .OrderByDescending(x => MeanTrust(x.Sender))
-            .ThenBy(x => Vec2.Distance(observation.SelfPosition, x.Claimed))
+            .ThenBy(x => observation.DistanceTo(x.Claimed))
             .ToList();
 
         if (candidates.Count > 0)
         {
             var best = candidates[0];
             _pending = new PendingProbe(best.Sender, best.Claimed, observation.Tick + VerifyWindowTicks);
-            return Steering.DirectionToward(best.Claimed - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(best.Claimed));
         }
 
         return NextExploreAction();
@@ -97,7 +97,7 @@ public sealed class TrustAwareSearchAgent : Agent
         if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= ReportCooldown)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(Position, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
             ctx.World.Transmit(
                 this,
@@ -112,7 +112,7 @@ public sealed class TrustAwareSearchAgent : Agent
         }
 
         LastAction = Decide(observation);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 
@@ -122,7 +122,7 @@ public sealed class TrustAwareSearchAgent : Agent
         var probe = _pending.Value;
 
         var confirmed = observation.NearbyIncidents.Any(i =>
-            Vec2.Distance(i.Position, probe.Claimed) <= VerifyRadius);
+            Vec2.ToroidalDistance(i.Position, probe.Claimed, observation.WorldWidth, observation.WorldHeight) <= VerifyRadius);
 
         if (confirmed)
         {

@@ -37,9 +37,9 @@ public sealed class StigmergyAgent : Agent
         if (observation.NearbyIncidents.Count > 0)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
-            return Steering.DirectionToward(nearest.Position - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(nearest.Position));
         }
 
         var reports = observation.NearbyMessages
@@ -49,11 +49,11 @@ public sealed class StigmergyAgent : Agent
                 return (Ok: ok, Claimed: claimed);
             })
             .Where(x => x.Ok)
-            .OrderBy(x => Vec2.Distance(observation.SelfPosition, x.Claimed))
+            .OrderBy(x => observation.DistanceTo(x.Claimed))
             .ToList();
 
         if (reports.Count > 0)
-            return Steering.DirectionToward(reports[0].Claimed - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(reports[0].Claimed));
 
         return Steering.RandomAction(_rng);
     }
@@ -67,7 +67,7 @@ public sealed class StigmergyAgent : Agent
         if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= DropCooldown)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(Position, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
             ctx.World.Transmit(
                 this,
@@ -78,7 +78,7 @@ public sealed class StigmergyAgent : Agent
         }
 
         LastAction = Decide(observation);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 }

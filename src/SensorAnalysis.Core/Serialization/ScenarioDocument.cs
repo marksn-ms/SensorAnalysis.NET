@@ -73,6 +73,7 @@ public sealed class ScenarioDocument
             X = i.Position.X,
             Y = i.Position.Y,
             Intensity = i.Intensity,
+            IncidentType = i.IncidentType,
             Label = i.Label
         }).ToList()
     };
@@ -108,6 +109,9 @@ public sealed class IncidentPlacement
 
     /// <summary>Intensity of the incident (domain-specific meaning).</summary>
     public double Intensity { get; set; } = 1.0;
+
+    /// <summary>Logical incident kind used for GUI styling (default: <c>Incident</c>).</summary>
+    public string IncidentType { get; set; } = "Incident";
 
     /// <summary>Optional label for the incident.</summary>
     public string Label { get; set; } = "";

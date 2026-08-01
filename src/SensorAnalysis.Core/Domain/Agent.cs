@@ -90,14 +90,14 @@ public class Agent : WorldObject
     /// <summary>
     /// Performs a simulation tick for this agent: observe, decide, move and collect reward.
     /// </summary>
-    /// <param name="ctx">World context used for observations and bounds clamping.</param>
+    /// <param name="ctx">World context used for observations and toroidal wrapping.</param>
     public override void Tick(WorldContext ctx)
     {
         var observation = ctx.World.Observe(this);
         LastAction = Decide(observation);
         var step = LastAction.ToStep() * StepSize;
         var next = Position + step;
-        Position = ctx.World.Clamp(next);
+        Position = ctx.World.Wrap(next);
         TotalReward += observation.InstantReward;
     }
 }
@@ -110,6 +110,12 @@ public sealed record AgentObservation
 
     /// <summary>The observing agent's current position.</summary>
     public required Vec2 SelfPosition { get; init; }
+
+    /// <summary>Toroidal world width (same units as positions).</summary>
+    public required double WorldWidth { get; init; }
+
+    /// <summary>Toroidal world height (same units as positions).</summary>
+    public required double WorldHeight { get; init; }
 
     /// <summary>Information about other agents within sensory range.</summary>
     public required IReadOnlyList<AgentInfo> NearbyAgents { get; init; }
@@ -125,6 +131,18 @@ public sealed record AgentObservation
 
     /// <summary>Immediate reward observed on this tick (may be zero or domain-specific).</summary>
     public double InstantReward { get; init; }
+
+    /// <summary>Toroidal distance from the observer to <paramref name="p"/>.</summary>
+    /// <param name="p">Target point.</param>
+    /// <returns>Shortest distance on the torus.</returns>
+    public double DistanceTo(Vec2 p) =>
+        Vec2.ToroidalDistance(SelfPosition, p, WorldWidth, WorldHeight);
+
+    /// <summary>Shortest toroidal displacement from the observer to <paramref name="p"/>.</summary>
+    /// <param name="p">Target point.</param>
+    /// <returns>Minimum-image delta vector.</returns>
+    public Vec2 DisplacementTo(Vec2 p) =>
+        Vec2.ToroidalDisplacement(SelfPosition, p, WorldWidth, WorldHeight);
 }
 
 /// <summary>Lightweight information about another agent.</summary>

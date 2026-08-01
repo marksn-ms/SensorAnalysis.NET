@@ -31,10 +31,10 @@ public sealed class GreedyIncidentAgent : Agent
         }
 
         var nearest = observation.NearbyIncidents
-            .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
+            .OrderBy(i => observation.DistanceTo(i.Position))
             .First();
 
-        var delta = nearest.Position - observation.SelfPosition;
+        var delta = observation.DisplacementTo(nearest.Position);
         return DirectionToward(delta);
     }
 

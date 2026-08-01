@@ -12,11 +12,15 @@ namespace SensorAnalysis.Agents.Strategies;
 public class OrbitingCoopAgent : Agent
 {
     private readonly Random _rng;
+    /// <summary>Ticks since last incident report broadcast (for cooldown).</summary>
     protected int TicksSinceReport;
     private AgentAction _exploreHeading = AgentAction.Stay;
     private int _explorePersist;
+    /// <summary>Incident id currently being orbited (null if none).</summary>
     protected int? CommittedIncidentId;
+    /// <summary>Incident position currently being orbited (last known).</summary>
     protected Vec2 CommittedPosition;
+    /// <summary>Incident reports overheard (agent id, incident id).</summary>
     protected readonly HashSet<(int AgentId, int IncidentId)> HeardReports = new();
 
     /// <summary>Creates an orbiting cooperative agent.</summary>
@@ -53,7 +57,7 @@ public class OrbitingCoopAgent : Agent
         MaybeBroadcast(ctx, observation);
 
         LastAction = ChooseAction(observation, personalSpace);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
 
         if (CommittedIncidentId is int id &&
@@ -82,7 +86,7 @@ public class OrbitingCoopAgent : Agent
         if (observation.NearbyIncidents.Count == 0) return;
 
         var nearest = observation.NearbyIncidents
-            .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
+            .OrderBy(i => observation.DistanceTo(i.Position))
             .First();
         Commit(nearest.Id, nearest.Position);
     }
@@ -100,8 +104,8 @@ public class OrbitingCoopAgent : Agent
                 continue;
 
             var othersCloser = observation.NearbyAgents.Count(a =>
-                Vec2.Distance(a.Position, claimed) + 1e-6 <
-                Vec2.Distance(observation.SelfPosition, claimed));
+                Vec2.ToroidalDistance(a.Position, claimed, observation.WorldWidth, observation.WorldHeight) + 1e-6 <
+                observation.DistanceTo(claimed));
             if (othersCloser >= MaxOthersCloserToJoin)
                 continue;
 
@@ -140,7 +144,9 @@ public class OrbitingCoopAgent : Agent
             var center = observation.NearbyIncidents
                 .FirstOrDefault(i => i.Id == CommittedIncidentId.Value);
             var target = center.Id == CommittedIncidentId.Value ? center.Position : CommittedPosition;
-            return Steering.OrbitClockwise(observation.SelfPosition, target, orbitRadius);
+            return Steering.OrbitClockwise(
+                observation.SelfPosition, target, orbitRadius,
+                observation.WorldWidth, observation.WorldHeight);
         }
 
         return Steering.ExploreWithPersonalSpace(
@@ -149,6 +155,8 @@ public class OrbitingCoopAgent : Agent
             _explorePersist,
             observation.NearbyAgents,
             personalSpace,
+            observation.WorldWidth,
+            observation.WorldHeight,
             _rng,
             out _exploreHeading,
             out _explorePersist);

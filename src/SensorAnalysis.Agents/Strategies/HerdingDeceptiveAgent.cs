@@ -55,7 +55,7 @@ public sealed class HerdingDeceptiveAgent : Agent
         }
 
         LastAction = ChooseHerdOrWander(observation, active);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 
@@ -73,31 +73,33 @@ public sealed class HerdingDeceptiveAgent : Agent
         if (victims.Count == 0)
             return Steering.RandomAction(_rng);
 
+        var w = observation.WorldWidth;
+        var h = observation.WorldHeight;
         var victim = victims
-            .OrderBy(v => active.Min(i => Vec2.Distance(v.Position, i.Position)))
+            .OrderBy(v => active.Min(i => Vec2.ToroidalDistance(v.Position, i.Position, w, h)))
             .First();
         var eventPos = active
-            .OrderBy(i => Vec2.Distance(victim.Position, i.Position))
+            .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
             .First()
             .Position;
 
         // Block point: personal-space intrusion on the segment victim -> event.
         var personal = SensorRange * 0.5;
-        var toEvent = eventPos - victim.Position;
+        var toEvent = Vec2.ToroidalDisplacement(victim.Position, eventPos, w, h);
         var dist = toEvent.Length;
         Vec2 block;
         if (dist < 1e-6)
         {
-            block = victim.Position + new Vec2(personal, 0);
+            block = Vec2.Wrap(victim.Position + new Vec2(personal, 0), w, h);
         }
         else
         {
             var dir = toEvent.Normalize();
             var along = Math.Min(personal, dist * 0.5);
-            block = victim.Position + dir * along;
+            block = Vec2.Wrap(victim.Position + dir * along, w, h);
         }
 
-        return Steering.DirectionToward(block - observation.SelfPosition);
+        return Steering.DirectionToward(observation.DisplacementTo(block));
     }
 
     private Vec2 PickDecoy(WorldContext ctx, IReadOnlyList<IncidentInfo> active)
@@ -105,14 +107,14 @@ public sealed class HerdingDeceptiveAgent : Agent
         var w = ctx.World.WorldWidthPx;
         var h = ctx.World.WorldHeightPx;
         if (active.Count == 0)
-            return ctx.World.Clamp(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
+            return ctx.World.Wrap(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
 
         Vec2 best = Position;
         var bestScore = double.NegativeInfinity;
         for (int i = 0; i < 24; i++)
         {
             var candidate = new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h);
-            var minDist = active.Min(inc => Vec2.Distance(candidate, inc.Position));
+            var minDist = active.Min(inc => ctx.World.Distance(candidate, inc.Position));
             if (minDist > bestScore)
             {
                 bestScore = minDist;
@@ -120,7 +122,7 @@ public sealed class HerdingDeceptiveAgent : Agent
             }
         }
 
-        return ctx.World.Clamp(best);
+        return ctx.World.Wrap(best);
     }
 }
 

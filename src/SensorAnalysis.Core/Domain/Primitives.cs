@@ -28,11 +28,64 @@ public readonly record struct Vec2(double X, double Y)
     /// <summary>Scales a vector by a scalar.</summary>
     public static Vec2 operator *(Vec2 a, double s) => new(a.X * s, a.Y * s);
 
-    /// <summary>Euclidean distance between two points.</summary>
+    /// <summary>Euclidean distance between two points (no wrapping).</summary>
     /// <param name="a">First point.</param>
     /// <param name="b">Second point.</param>
     /// <returns>Distance in world units.</returns>
     public static double Distance(Vec2 a, Vec2 b) => (a - b).Length;
+
+    /// <summary>
+    /// Wraps a scalar into <c>[0, size)</c> (toroidal / modular arithmetic).
+    /// </summary>
+    /// <param name="value">Coordinate that may lie outside the interval.</param>
+    /// <param name="size">Positive world extent along that axis.</param>
+    /// <returns>Equivalent coordinate inside the interval.</returns>
+    public static double WrapCoord(double value, double size)
+    {
+        if (size <= 0) return value;
+        var r = value % size;
+        return r < 0 ? r + size : r;
+    }
+
+    /// <summary>
+    /// Wraps a point onto a toroidal world of the given size (classic open-world topology).
+    /// </summary>
+    /// <param name="p">Point in world coordinates.</param>
+    /// <param name="width">World width.</param>
+    /// <param name="height">World height.</param>
+    /// <returns>Point with coordinates in <c>[0, width) × [0, height)</c>.</returns>
+    public static Vec2 Wrap(Vec2 p, double width, double height) =>
+        new(WrapCoord(p.X, width), WrapCoord(p.Y, height));
+
+    /// <summary>
+    /// Shortest signed displacement from <paramref name="from"/> to <paramref name="to"/> on a torus.
+    /// </summary>
+    /// <param name="from">Origin point.</param>
+    /// <param name="to">Destination point.</param>
+    /// <param name="width">World width.</param>
+    /// <param name="height">World height.</param>
+    /// <returns>Delta vector with each component in <c>(-size/2, size/2]</c>.</returns>
+    public static Vec2 ToroidalDisplacement(Vec2 from, Vec2 to, double width, double height) =>
+        new(ShortestDelta(from.X, to.X, width), ShortestDelta(from.Y, to.Y, height));
+
+    /// <summary>
+    /// Shortest distance between two points on a toroidal world.
+    /// </summary>
+    /// <param name="a">First point.</param>
+    /// <param name="b">Second point.</param>
+    /// <param name="width">World width.</param>
+    /// <param name="height">World height.</param>
+    /// <returns>Toroidal distance in world units.</returns>
+    public static double ToroidalDistance(Vec2 a, Vec2 b, double width, double height) =>
+        ToroidalDisplacement(a, b, width, height).Length;
+
+    private static double ShortestDelta(double from, double to, double size)
+    {
+        if (size <= 0) return to - from;
+        var d = WrapCoord(to - from, size);
+        if (d > size * 0.5) d -= size;
+        return d;
+    }
 }
 
 /// <summary>Integer grid size (tiles across / tiles high, or pixel size of a tile).</summary>

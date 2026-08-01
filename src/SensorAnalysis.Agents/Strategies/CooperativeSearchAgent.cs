@@ -40,9 +40,9 @@ public sealed class CooperativeSearchAgent : Agent
         if (observation.NearbyIncidents.Count > 0)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(observation.SelfPosition, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
-            return Steering.DirectionToward(nearest.Position - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(nearest.Position));
         }
 
         var reports = observation.NearbyMessages
@@ -52,13 +52,13 @@ public sealed class CooperativeSearchAgent : Agent
                 IncidentMarker.TryParse(m.Payload, out _, out var claimed);
                 return (Msg: m, Claimed: claimed);
             })
-            .OrderBy(x => Vec2.Distance(observation.SelfPosition, x.Claimed))
+            .OrderBy(x => observation.DistanceTo(x.Claimed))
             .ToList();
 
         if (reports.Count > 0)
         {
             var best = reports[0];
-            return Steering.DirectionToward(best.Claimed - observation.SelfPosition);
+            return Steering.DirectionToward(observation.DisplacementTo(best.Claimed));
         }
 
         return NextExploreAction();
@@ -72,7 +72,7 @@ public sealed class CooperativeSearchAgent : Agent
         if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= ReportCooldown)
         {
             var nearest = observation.NearbyIncidents
-                .OrderBy(i => Vec2.Distance(Position, i.Position))
+                .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
             ctx.World.Transmit(
                 this,
@@ -87,7 +87,7 @@ public sealed class CooperativeSearchAgent : Agent
         }
 
         LastAction = Decide(observation);
-        Position = ctx.World.Clamp(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 

@@ -9,6 +9,12 @@ public class Incident : WorldObject
     /// <summary>Remaining "resources" or intensity. Agents reduce this when nearby.</summary>
     public double Intensity { get; set; } = 1.0;
 
+    /// <summary>
+    /// Logical incident kind (analogous to <see cref="Agent.AgentType"/>).
+    /// Used by the GUI for color/shape styling; default <c>Incident</c>.
+    /// </summary>
+    public string IncidentType { get; set; } = "Incident";
+
     /// <summary>How much intensity an agent drains per tick while in range (scaled by multi-agent exponent).</summary>
     public double DrainPerAgentPerTick { get; set; } = 0.01;
 

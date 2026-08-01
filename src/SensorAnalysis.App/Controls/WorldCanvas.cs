@@ -1,7 +1,7 @@
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using SensorAnalysis.App.Visualization;
 using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.World;
 
@@ -10,6 +10,7 @@ namespace SensorAnalysis.App.Controls;
 /// <summary>
 /// Renders the simulation world: tiles, agents, incidents, messages.
 /// Supports pan (middle/right drag) and zoom (wheel).
+/// Agent/incident colors and shapes come from <see cref="EntityVisualCatalog"/>.
 /// </summary>
 public class WorldCanvas : FrameworkElement
 {
@@ -49,24 +50,27 @@ public class WorldCanvas : FrameworkElement
         set => SetValue(SelectedObjectProperty, value);
     }
 
+    /// <summary>
+    /// Visual style catalog used for agent/incident markers.
+    /// Defaults to <see cref="EntityVisualCatalog.Default"/>.
+    /// </summary>
+    public EntityVisualCatalog VisualCatalog { get; set; } = EntityVisualCatalog.Default;
+
     private Point _panOffset;
     private Point? _dragStart;
     private Point _panAtDragStart;
 
     private static readonly Pen TilePen = new(new SolidColorBrush(Color.FromRgb(60, 60, 60)), 1);
-    private static readonly Brush AgentBrush = new SolidColorBrush(Color.FromRgb(80, 160, 255));
-    private static readonly Brush IncidentBrush = new SolidColorBrush(Color.FromRgb(255, 100, 80));
     private static readonly Brush MessageBrush = new SolidColorBrush(Color.FromRgb(180, 255, 120));
-    private static readonly Brush SelectedBrush = new SolidColorBrush(Color.FromRgb(255, 220, 60));
+    private static readonly Brush SelectedFillBrush = new SolidColorBrush(Color.FromRgb(255, 220, 60));
     private static readonly Pen SelectedPen = new(Brushes.White, 1.5);
+    private static readonly Dictionary<string, Brush> BrushCache = new(StringComparer.Ordinal);
 
     static WorldCanvas()
     {
         TilePen.Freeze();
-        AgentBrush.Freeze();
-        IncidentBrush.Freeze();
         MessageBrush.Freeze();
-        SelectedBrush.Freeze();
+        SelectedFillBrush.Freeze();
         SelectedPen.Freeze();
     }
 
@@ -77,6 +81,7 @@ public class WorldCanvas : FrameworkElement
         ClipToBounds = true;
     }
 
+    /// <inheritdoc />
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         var factor = e.Delta > 0 ? 1.1 : 1 / 1.1;
@@ -85,6 +90,7 @@ public class WorldCanvas : FrameworkElement
         e.Handled = true;
     }
 
+    /// <inheritdoc />
     protected override void OnMouseDown(MouseButtonEventArgs e)
     {
         Focus();
@@ -106,6 +112,7 @@ public class WorldCanvas : FrameworkElement
         }
     }
 
+    /// <inheritdoc />
     protected override void OnMouseMove(MouseEventArgs e)
     {
         if (_dragStart is { } start && IsMouseCaptured)
@@ -118,6 +125,7 @@ public class WorldCanvas : FrameworkElement
         }
     }
 
+    /// <inheritdoc />
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
         if (IsMouseCaptured)
@@ -125,6 +133,7 @@ public class WorldCanvas : FrameworkElement
         _dragStart = null;
     }
 
+    /// <inheritdoc />
     protected override void OnRender(DrawingContext dc)
     {
         dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(30, 30, 30)), null,
@@ -154,26 +163,27 @@ public class WorldCanvas : FrameworkElement
             dc.DrawRectangle(fill, TilePen, rect);
         }
 
-        // Incidents
+        // Incidents — triangles (or registered shape) by IncidentType
         foreach (var inc in World.Incidents)
         {
             if (inc.IsDepleted) continue;
-            var brush = inc.IsSelected || ReferenceEquals(inc, SelectedObject) ? SelectedBrush : IncidentBrush;
-            DrawMarker(dc, inc.Position, 6, brush, z);
+            var style = VisualCatalog.ResolveIncident(inc.IncidentType);
+            var selected = inc.IsSelected || ReferenceEquals(inc, SelectedObject);
+            DrawStyledMarker(dc, inc.Position, style, selected, z);
         }
 
-        // Messages
+        // Messages — small lime dots (environmental echoes)
         foreach (var msg in World.Messages)
-            DrawMarker(dc, msg.Position, 3, MessageBrush, z);
+            DrawEllipseMarker(dc, msg.Position, 3, MessageBrush, z);
 
-        // Agents
+        // Agents — color/shape by AgentType
         foreach (var agent in World.Agents)
         {
-            var brush = agent.IsSelected || ReferenceEquals(agent, SelectedObject) ? SelectedBrush : AgentBrush;
-            DrawMarker(dc, agent.Position, 5, brush, z);
-            if (ReferenceEquals(agent, SelectedObject))
+            var style = VisualCatalog.ResolveAgent(agent.AgentType);
+            var selected = agent.IsSelected || ReferenceEquals(agent, SelectedObject);
+            DrawStyledMarker(dc, agent.Position, style, selected, z);
+            if (selected)
             {
-                // sensor range ring
                 var center = WorldToScreenPoint(agent.Position);
                 var radius = agent.SensorRange * z;
                 dc.DrawEllipse(null, SelectedPen, center, radius, radius);
@@ -181,10 +191,67 @@ public class WorldCanvas : FrameworkElement
         }
     }
 
-    private void DrawMarker(DrawingContext dc, Vec2 worldPos, double radius, Brush brush, double z)
+    private void DrawStyledMarker(DrawingContext dc, Vec2 worldPos, EntityVisualStyle style, bool selected, double z)
+    {
+        var brush = selected ? SelectedFillBrush : GetBrush(style.R, style.G, style.B);
+        var pen = selected ? SelectedPen : null;
+        var scale = Math.Max(0.5, z);
+        var radius = style.Radius * scale;
+        var center = WorldToScreenPoint(worldPos);
+
+        switch (style.Shape)
+        {
+            case EntityMarkerShape.Square:
+                dc.DrawRectangle(brush, pen,
+                    new Rect(center.X - radius, center.Y - radius, radius * 2, radius * 2));
+                break;
+            case EntityMarkerShape.Diamond:
+                DrawPolygon(dc, brush, pen,
+                    new Point(center.X, center.Y - radius),
+                    new Point(center.X + radius, center.Y),
+                    new Point(center.X, center.Y + radius),
+                    new Point(center.X - radius, center.Y));
+                break;
+            case EntityMarkerShape.Triangle:
+                DrawPolygon(dc, brush, pen,
+                    new Point(center.X, center.Y - radius),
+                    new Point(center.X + radius * 0.9, center.Y + radius * 0.75),
+                    new Point(center.X - radius * 0.9, center.Y + radius * 0.75));
+                break;
+            default:
+                dc.DrawEllipse(brush, pen, center, radius, radius);
+                break;
+        }
+    }
+
+    private void DrawEllipseMarker(DrawingContext dc, Vec2 worldPos, double radius, Brush brush, double z)
     {
         var pt = WorldToScreenPoint(worldPos);
-        dc.DrawEllipse(brush, null, pt, radius * Math.Max(0.5, z), radius * Math.Max(0.5, z));
+        var r = radius * Math.Max(0.5, z);
+        dc.DrawEllipse(brush, null, pt, r, r);
+    }
+
+    private static void DrawPolygon(DrawingContext dc, Brush brush, Pen? pen, params Point[] points)
+    {
+        var geo = new StreamGeometry();
+        using (var ctx = geo.Open())
+        {
+            ctx.BeginFigure(points[0], isFilled: true, isClosed: true);
+            ctx.PolyLineTo(points.Skip(1).ToList(), isStroked: true, isSmoothJoin: true);
+        }
+        geo.Freeze();
+        dc.DrawGeometry(brush, pen, geo);
+    }
+
+    private static Brush GetBrush(byte r, byte g, byte b)
+    {
+        var key = $"{r},{g},{b}";
+        if (BrushCache.TryGetValue(key, out var cached))
+            return cached;
+        var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        brush.Freeze();
+        BrushCache[key] = brush;
+        return brush;
     }
 
     private Point WorldToScreenPoint(Vec2 p) =>
@@ -201,9 +268,9 @@ public class WorldCanvas : FrameworkElement
         if (World is null) return null;
         const double hitR = 10;
         foreach (var a in World.Agents)
-            if (Vec2.Distance(a.Position, worldPt) <= hitR) return a;
+            if (World.Distance(a.Position, worldPt) <= hitR) return a;
         foreach (var i in World.Incidents)
-            if (!i.IsDepleted && Vec2.Distance(i.Position, worldPt) <= hitR) return i;
+            if (!i.IsDepleted && World.Distance(i.Position, worldPt) <= hitR) return i;
         return null;
     }
 

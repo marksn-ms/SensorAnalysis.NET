@@ -35,7 +35,7 @@ public sealed class RewardModel
         // Incident proximity: higher intensity / closer → more reward
         foreach (var inc in obs.NearbyIncidents)
         {
-            var dist = Math.Max(1.0, Vec2.Distance(obs.SelfPosition, inc.Position));
+            var dist = Math.Max(1.0, obs.DistanceTo(inc.Position));
             reward += ScaleIncidentProximity * (inc.Intensity / dist);
         }
 
@@ -45,7 +45,7 @@ public sealed class RewardModel
 
         // Coverage bonus: tile not covered before this tick
         var tile = world.TileAt(obs.SelfPosition);
-        if (tile is not null && tile.LastCoveredTick < 0)
+        if (tile.LastCoveredTick < 0)
             reward += ScaleCoverageBonus;
 
         return reward;
