@@ -4,7 +4,8 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Agents.Watchers;
 
 /// <summary>
-/// Tracks incident-clearance progress: active count, fraction cleared, and first all-clear tick.
+/// Tracks incident-clearance progress under batch or streaming (periodic) incident loads.
+/// Fraction cleared uses cumulative spawned incidents (depleted entries remain in the world list).
 /// Emits one summary row per trial at trial end (plus optional per-tick samples).
 /// </summary>
 public sealed class IncidentClearanceWatcher : IWatcher
@@ -40,6 +41,7 @@ public sealed class IncidentClearanceWatcher : IWatcher
     /// <inheritdoc />
     public void OnTrialStart(SimWorld world, int trial)
     {
+        // Count at trial start (before tick 0 wave). Streaming waves update the denominator via spawned total.
         _initialIncidents[trial] = world.Incidents.Count;
         _allClearTick[trial] = null;
     }
@@ -47,10 +49,10 @@ public sealed class IncidentClearanceWatcher : IWatcher
     /// <inheritdoc />
     public void OnTick(SimWorld world, long tick, int trial)
     {
-        var initial = _initialIncidents.GetValueOrDefault(trial, world.Incidents.Count);
+        var spawned = world.Incidents.Count; // includes depleted — grows with periodic waves
         var active = world.Incidents.Count(i => !i.IsDepleted);
-        var cleared = initial == 0 ? 1.0 : (double)(initial - active) / initial;
-        if (active == 0 && _allClearTick.GetValueOrDefault(trial) is null)
+        var cleared = spawned == 0 ? 1.0 : (double)(spawned - active) / spawned;
+        if (active == 0 && spawned > 0 && _allClearTick.GetValueOrDefault(trial) is null)
             _allClearTick[trial] = tick;
 
         if (tick % _sampleEvery != 0) return;
@@ -61,18 +63,19 @@ public sealed class IncidentClearanceWatcher : IWatcher
             trial,
             active,
             cleared,
-            active == 0 ? 1 : 0,
+            active == 0 && spawned > 0 ? 1 : 0,
             _allClearTick.GetValueOrDefault(trial) ?? -1,
-            initial
+            // Column retained for CSV stability: trial-start count (0 when waves-only).
+            _initialIncidents.GetValueOrDefault(trial, spawned)
         });
     }
 
     /// <inheritdoc />
     public void OnTrialEnd(SimWorld world, int trial)
     {
-        var initial = _initialIncidents.GetValueOrDefault(trial, world.Incidents.Count);
+        var spawned = world.Incidents.Count;
         var active = world.Incidents.Count(i => !i.IsDepleted);
-        var cleared = initial == 0 ? 1.0 : (double)(initial - active) / initial;
+        var cleared = spawned == 0 ? 1.0 : (double)(spawned - active) / spawned;
         var clearTick = _allClearTick.GetValueOrDefault(trial);
         // Sentinel end-of-trial row with tick = -1 for easy collation.
         _rows.Add(new double[]
@@ -81,9 +84,9 @@ public sealed class IncidentClearanceWatcher : IWatcher
             trial,
             active,
             cleared,
-            active == 0 ? 1 : 0,
+            active == 0 && spawned > 0 ? 1 : 0,
             clearTick ?? -1,
-            initial
+            _initialIncidents.GetValueOrDefault(trial, spawned)
         });
     }
 

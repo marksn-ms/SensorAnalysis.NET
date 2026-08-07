@@ -99,14 +99,17 @@ public class SimWorldTests
     {
         var w = CreateWorld();
         var deployer = new RandomDeployer();
-        deployer.Deploy(w, new DeployRequest
+        deployer.Attach(w, new RandomDeployOptions
         {
-            AgentCount = 7,
-            IncidentCount = 3,
-            AgentTypeName = "RandomWalk",
-            AgentFactory = _ => new RandomWalkAgent(),
+            Count = 7,
+            TypeName = "RandomWalk",
             SensorRange = 50
+        }, new DeployContext
+        {
+            ResolveAgent = _ => new RandomWalkAgent()
         });
+        new UniformIncidentDeployer().Attach(w, new UniformIncidentOptions { Count = 3 },
+            new DeployContext { ResolveAgent = _ => new RandomWalkAgent() });
 
         w.Agents.Should().HaveCount(7);
         w.Incidents.Should().HaveCount(3);

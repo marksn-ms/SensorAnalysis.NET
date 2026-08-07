@@ -10,12 +10,15 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 
 ## Highlights
 
-- **WPF world view** — pan, zoom, select agents/incidents; type-colored markers (circles / diamonds / triangles)
-- **Directive log** — schedule deployments by tick (Gaussian/Random, mixed agent types); inject while paused
-- **Live metrics** — pin inherent stats or registered watcher columns; sparklines vs tick
+- **WPF world view** — pan, zoom, select agents/incidents/messages **or tiles**; type-colored markers (circles / diamonds / triangles)
+- **New World (options)** — File menu / toolbar **New…** sets title, grid size, tile px, and seed (remembered for the next New)
+- **Tick delay** — toolbar **Delay ms** controls the Run timer interval
+- **Record video** — optional MJPEG AVI capture (ffmpeg-free) alongside PNG frame sequences
+- **Directive log** — at tick *t*, add a deployer; the form is driven by that deployer’s `[DeployerParam]` options (agent-type and incident-type combos). Multiple directives may share a tick.
+- **Live metrics** — pin inherent stats or registered watcher columns (Coverage, Connectivity, Clearance, TrustTel); sparklines vs tick
 - **In-process agents** — implement `Agent.Decide` / `Tick`, register via `IAgentFactory`
-- **Radio messaging** — `SimWorld.Transmit` delivers to in-range **inboxes** (broadcast = empty `ToAgentId`)
-- **Watchers** — coverage, connectivity, clearance, trust telemetry
+- **Radio messaging** — `SimWorld.Transmit` delivers to in-range **inboxes** (broadcast = empty `ToAgentId`); global **Radio traffic** panel narrates contact / orbit / break / status in fighter-pilot style, color-coded by sender type
+- **Watchers** — coverage, connectivity, clearance, trust telemetry (registered in the GUI live runner and batch export)
 - **Experiment export** — `run-meta.json` + `metrics.csv` per run
 - **Headless CLI** — multi-regime batches (`--regime honest|deceptive|mitigated|…`)
 - **Deterministic seeds** — fixed base seed + trial index
@@ -25,7 +28,7 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 | Project | Role |
 |---------|------|
 | `SensorAnalysis.Core` | World, agents, incidents, messages, intel oracle, export |
-| `SensorAnalysis.Agents` | Strategies, `GaussianDeployer`, watchers |
+| `SensorAnalysis.Agents` | Strategies, `GaussianDeployer` / `RandomDeployer`, watchers |
 | `SensorAnalysis.App` | WPF UI (directives, live metrics, entity visuals) |
 | `SensorAnalysis.Cli` | Headless batch runner |
 | `SensorAnalysis.Core.Tests` | Unit tests |
@@ -53,11 +56,14 @@ dotnet run --project src/SensorAnalysis.App
 
 Typical interactive flow:
 
-1. Edit the **Environment directives** draft (deployer, agent/adversary types & counts, incidents) → **Add to log** / **Apply due**
-2. **Run** or **Step** — due directives at `AtTick <= CurrentTick` apply automatically before each tick
-3. Pause (**Stop**) to **Apply now** mid-run (e.g. inject more agents at the current tick)
-4. Use **+** under Live metrics to pin inherent fields or watcher columns; sparklines plot vs tick
-5. **Legend** lists colors/shapes for agent and incident types currently in the world
+1. **New** / **New…** — create a world (options dialog for grid size & seed)
+2. Edit the **Environment directives** draft (deployer, agent/adversary types & counts, incident type) → **Add** / **Apply due**
+3. **Run** or **Step** — due directives at `AtTick <= CurrentTick` apply automatically before each tick; adjust **Delay ms** for run speed
+4. Click empty space to select a **tile** (col/row, coverage, objects in tile); click markers to select agents/incidents/messages
+5. Optionally enable **Record frames** (PNG) and/or **Record video** (MJPEG AVI on Stop)
+6. Pause (**Stop**) to **Apply now** mid-run (e.g. inject more agents at the current tick)
+7. Use **+** under Live metrics to pin inherent fields or watcher columns (incl. Clearance / TrustTel); sparklines plot vs tick
+8. **Legend** lists colors/shapes for agent and incident types currently in the world
 
 ### Publish CLI next to the Trust paper repo
 
@@ -72,7 +78,8 @@ Trust overnight scripts prefer `Trust/SensorAnalysis/SensorAnalysis.Cli.exe` (th
 ```bash
 dotnet run --project src/SensorAnalysis.Cli -c Release -- \
   --regime honest --trials 100 --ticks 1000 \
-  --agents 8 --incidents 6 --adversaries 0 \
+  --agents 8 --incidents 0 --incident-period 25 --incident-wave 1 \
+  --adversaries 0 \
   --cols 10 --rows 10 --tile-px 40 \
   --sensor-range 80 --sigma 80 --seed 42 \
   --out ./experiments/honest
@@ -96,8 +103,13 @@ dotnet run --project src/SensorAnalysis.Cli -c Release -- \
 | `--cols` / `--rows` / `--tile-px` | World grid (default 10×10×40) |
 | `--sensor-range` | Sense / default radio range |
 | `--sigma` | Gaussian drop σ for **honest** agents |
-| `--adversaries` | Count of infiltrators (deceptive/mitigated) |
-| `--incidents-near-adversaries` | Optional stress flag (off by default; keep incident process identical across regimes) |
+| `--adversaries` | Count of infiltrators (separate Random deploy step) |
+| `--incidents` | Initial one-shot incidents (UniformIncidents or PlaceNear) |
+| `--incident-period` | Ticks between waves (default **25**; `0` disables) |
+| `--incident-wave` | Incidents per wave (default **1**) |
+| `--incidents-near-adversaries` | Hybrid load: `PeriodicIncidents` + `PlaceNear` with rates summing to full `--incident-period` load. Off by default — never auto-enabled by adversary count. |
+| `--near-share` | Fraction of hybrid rate from PlaceNear (default **0.5**; rest is uniform). Periods ≈ `period/(1−share)` and `period/share`. |
+| `--near-range-factor` | PlaceNear radius as fraction of host sensor range (default **0.5**) |
 
 CLI prints an approximate disk-cover scale `n*` (sparse ≈ agents ≪ `n*`).
 
@@ -133,15 +145,22 @@ Register a canvas style in the App with `EntityVisualCatalog.Default.RegisterAge
 | Deceptive / infiltrator agents | Colored **diamonds** |
 | Incidents | Colored **triangles** (by `Incident.IncidentType`) |
 | Message echoes | Small lime dots |
+| Selected tile | Yellow fill + white border |
 
 Styles live in `SensorAnalysis.App.Visualization` so Core/CLI stay UI-free. New factories appear automatically via hash colors until you register a curated palette.
+
+**Video recording** writes a classic MJPEG AVI (managed RIFF, no ffmpeg). Compatible with VLC / Windows Media Player; not all browsers play it. No audio; classic AVI size limits apply (~2 GB).
 
 ## World mechanics (current)
 
 - **Topology** — **toroidal** (classic open world): leaving one edge enters the opposite edge. Sensing, radio, connectivity, drain, and steering use shortest-path distance on the torus. Soft “walls” can be modeled later as fixed inhabitants + collision avoidance rather than hard clamps.
 - **Incidents** — intensity drained each tick by agents with `ContributesToIncidentDrain` in range. Drain scales **superlinearly**: `DrainPerAgentPerTick * covering^MultiAgentDrainExponent` (default exponent 1.5).
 - **Messages** — `Transmit` enqueues inbox snapshots for in-range peers; optional short world echo for UI/metrics. Honest filter: broadcast (`ToAgentId == null`) or addressed to self; adversaries can disable filtering (eavesdrop-ready).
-- **Deployment (`GaussianDeployer`)** — honest agents: Gaussian about drop point; **adversaries: uniform random**; incidents: uniform unless `--incidents-near-adversaries`.
+- **Deployment** — one directive / CLI step = one deployer = one kind of thing.
+  - **Gaussian** / **Random**: `Count` + `Type` (+ sensor/sigma) for agents.
+  - **UniformIncidents**: one-shot uniform incidents.
+  - **PeriodicIncidents**: uniform waves (`Period`, `Count`).
+  - **PlaceNear**: incidents near `NearTypeName` at `RangeFactor` × host sensor range (one-shot or periodic via `PeriodTicks`).
 - **Intel** — `IIncidentOracle` / `WorldIncidentOracle` injects privileged incident lists into deceptive agents without hard-coding IDs in the tick loop.
 
 ## Watchers & export
@@ -168,7 +187,7 @@ out/
 | `Inhabitant` | `Agent` |
 | `Incident` | `Incident` |
 | `Marker` / messages | `Message` + inbox `Transmit` |
-| `Deployer` | `IDeployer` / `GaussianDeployer` |
+| `Deployer` | `IDeployer` (tickable) / `GaussianDeployer` + `PeriodicIncidentDeployer` |
 | `Watcher` | `IWatcher` + `ExperimentExporter` |
 
 ## Documentation

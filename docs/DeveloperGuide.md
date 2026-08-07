@@ -48,7 +48,12 @@ The exporter prefixes columns with the watcher name (`Coverage.tick`, …).
 
 ## Adding a deployer
 
-Implement `IDeployer.Deploy(SimWorld, DeployRequest)` and place agents/incidents using `world.Add(...)`.
+1. Create an options class with public get/set properties marked `[DeployerParam("Label")]`.
+2. Implement `IDeployer` (`CreateOptions`, `OptionsType`, `Attach(world, options, context)`, `Tick`).
+3. Register a factory in the App (`RegisterDeployers`) and, if needed, the CLI.
+
+The UI builds the directive form from those attributes — no hard-coded wave/agent fields in the panel.
+CLI and UI both attach deployers via `SimulationRunner.Deploy` / `AttachDeployer` with the same options types.
 
 ## Determinism
 

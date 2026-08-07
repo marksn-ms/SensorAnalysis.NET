@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -11,10 +12,12 @@ using SensorAnalysis.Agents.Watchers;
 using SensorAnalysis.App.Controls;
 using SensorAnalysis.App.Models;
 using SensorAnalysis.App.Services;
+using SensorAnalysis.App.Views;
 using SensorAnalysis.App.Visualization;
 using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
+using SensorAnalysis.Core.Messaging;
 using SensorAnalysis.Core.Metrics;
 using SensorAnalysis.Core.Serialization;
 using SensorAnalysis.Core.World;
@@ -23,16 +26,28 @@ namespace SensorAnalysis.App.ViewModels;
 
 /// <summary>
 /// View model for the main application window. Encapsulates world creation, directive-driven
-/// deployment, stepping, live metrics, and experiment exporting.
+/// deployment, stepping, live metrics, video recording, and experiment exporting.
 /// </summary>
 public partial class MainViewModel : ObservableObject
 {
     private readonly Core.World.SimulationRunner _runner = new();
     private readonly AgentFactoryRegistry _factories = new();
-    private readonly Dictionary<string, IDeployer> _deployers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<IDeployer>> _deployerFactories = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _runTimer;
     private readonly CoverageWatcher _coverageWatcher = new(sampleEveryTicks: 1);
     private readonly ConnectivityWatcher _connectivityWatcher = new(sampleEveryTicks: 1);
+    private readonly IncidentClearanceWatcher _clearanceWatcher = new(sampleEveryTicks: 1);
+    private readonly TrustTelemetryWatcher _trustTelWatcher = new(sampleEveryTicks: 5);
+    private readonly CanvasVideoRecorder _videoRecorder = new();
+    private RadioTrafficLog? _boundRadio;
+
+    private WorldOptions _lastWorldOptions = new()
+    {
+        Title = "New World",
+        TileCount = new GridSize(12, 12),
+        TileSizePx = new GridSize(40, 40)
+    };
+    private int _lastSeed = 42;
 
     /// <summary>Set by the view so we can capture frames of the live canvas.</summary>
     public WorldCanvas? Canvas { get; set; }
@@ -44,15 +59,20 @@ public partial class MainViewModel : ObservableObject
         RegisterDeployers();
 
         AgentTypeNames = new ObservableCollection<string>(_factories.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
-        DeployerNames = new ObservableCollection<string>(_deployers.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+        IncidentTypeNames = new ObservableCollection<string>(new[] { "Incident", "Hotspot", "Distress" });
+        DeployerNames = new ObservableCollection<string>(_deployerFactories.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
 
         _runner.AddWatcher(_coverageWatcher);
         _runner.AddWatcher(_connectivityWatcher);
+        _runner.AddWatcher(_clearanceWatcher);
+        _runner.AddWatcher(_trustTelWatcher);
         _runner.TickCompleted += OnTickCompleted;
 
         RebuildMetricCatalog();
         SeedDefaultMetrics();
-        SeedDefaultDirective();
+        DraftDeployerName = "Gaussian";
+        RebuildDraftFields();
+        SeedDefaultDirectives();
 
         _runTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _runTimer.Tick += (_, _) => AdvanceOneTick();
@@ -62,30 +82,35 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private SimWorld? _world;
     [ObservableProperty] private WorldObject? _selectedObject;
+    [ObservableProperty] private Tile? _selectedTile;
     [ObservableProperty] private double _zoom = 1.0;
     [ObservableProperty] private string _statusText = "Ready";
     [ObservableProperty] private string _tickText = "Tick 0";
     [ObservableProperty] private string _selectionSummary = "Nothing selected";
     [ObservableProperty] private bool _recordFrames;
+    [ObservableProperty] private bool _recordVideo;
     [ObservableProperty] private int _frameEveryNTicks = 10;
+    [ObservableProperty] private int _tickDelayMs = 50;
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private EnvironmentDirective? _selectedDirective;
     [ObservableProperty] private MetricCatalogEntry? _selectedCatalogEntry;
 
-    /// <summary>Draft fields for adding a new directive.</summary>
+    /// <summary>Draft: at this tick, run the selected deployer.</summary>
     [ObservableProperty] private long _draftAtTick;
     [ObservableProperty] private string _draftDeployerName = "Gaussian";
-    [ObservableProperty] private int _draftAgentCount = 10;
-    [ObservableProperty] private string _draftAgentTypeName = "OrbitingCoop";
-    [ObservableProperty] private int _draftAdversaryCount;
-    [ObservableProperty] private string _draftAdversaryTypeName = "HerdingDeceptive";
-    [ObservableProperty] private int _draftIncidentCount = 5;
+    [ObservableProperty] private string _draftValidationMessage = "";
 
     /// <summary>Available agent factory names.</summary>
     public ObservableCollection<string> AgentTypeNames { get; }
 
+    /// <summary>Known incident type names for directive combos.</summary>
+    public ObservableCollection<string> IncidentTypeNames { get; }
+
     /// <summary>Available deployer names.</summary>
     public ObservableCollection<string> DeployerNames { get; }
+
+    /// <summary>Property-driven draft fields for the selected deployer.</summary>
+    public ObservableCollection<DirectiveParameterField> DraftFields { get; } = new();
 
     /// <summary>Scheduled / applied environment directives.</summary>
     public ObservableCollection<EnvironmentDirective> Directives { get; } = new();
@@ -99,31 +124,69 @@ public partial class MainViewModel : ObservableObject
     /// <summary>Legend of agent/incident types currently present in the world.</summary>
     public ObservableCollection<LegendEntry> LegendEntries { get; } = new();
 
+    /// <summary>Narrated radio traffic (color-coded by sender type).</summary>
+    public ObservableCollection<RadioLogLine> RadioLog { get; } = new();
+
     private long _autoStopAt = long.MaxValue;
     private string? _frameDirectory;
 
-    partial void OnSelectedObjectChanged(WorldObject? value)
+    partial void OnTickDelayMsChanged(int value)
     {
-        SelectionSummary = value switch
-        {
-            Agent a => $"Agent #{a.Id} ({a.AgentType})\nPos: ({a.Position.X:F1}, {a.Position.Y:F1})\nRange: {a.SensorRange}\nReward: {a.TotalReward:F3}",
-            Incident i => $"Incident #{i.Id}\nPos: ({i.Position.X:F1}, {i.Position.Y:F1})\nIntensity: {i.Intensity:F3}",
-            _ => "Nothing selected"
-        };
+        _runTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(1, value));
     }
 
-    /// <summary>Create a new simulation world with default options and reset the runner.</summary>
+    partial void OnSelectedObjectChanged(WorldObject? value)
+    {
+        if (value is not null)
+            RefreshSelectionSummary();
+        else if (SelectedTile is null)
+            SelectionSummary = "Nothing selected";
+    }
+
+    partial void OnSelectedTileChanged(Tile? value)
+    {
+        if (value is not null)
+            RefreshSelectionSummary();
+        else if (SelectedObject is null)
+            SelectionSummary = "Nothing selected";
+    }
+
+    /// <summary>Create a new simulation world using the last-used options and seed.</summary>
     [RelayCommand]
     private void NewWorld()
     {
-        Stop();
-        var options = new WorldOptions
+        ResetWorld(_lastWorldOptions, _lastSeed);
+        StatusText = "World created. Tick-0 directives apply on Step/Run.";
+    }
+
+    /// <summary>Opens the world-options dialog and creates a world with the chosen settings.</summary>
+    [RelayCommand]
+    private void NewWorldWithOptions()
+    {
+        var dlgVm = new WorldOptionsDialogViewModel();
+        dlgVm.Prefill(_lastWorldOptions, _lastSeed);
+        var dlg = new WorldOptionsDialog
         {
-            Title = "New World",
-            TileCount = new GridSize(12, 12),
-            TileSizePx = new GridSize(40, 40)
+            Owner = Application.Current.MainWindow,
+            ViewModel = dlgVm
         };
-        _runner.Reset(options, seed: 42);
+        if (dlg.ShowDialog() != true) return;
+
+        _lastWorldOptions = dlgVm.ToWorldOptions();
+        _lastSeed = dlgVm.Seed;
+        ResetWorld(_lastWorldOptions, _lastSeed);
+        StatusText = $"World created ({_lastWorldOptions.TileCount.Width}×{_lastWorldOptions.TileCount.Height}, seed {_lastSeed}).";
+    }
+
+    private void ResetWorld(WorldOptions options, int seed)
+    {
+        Stop(finalizeVideo: false);
+        _videoRecorder.Clear();
+
+        _runner.Reset(CloneOptions(options), seed);
+        SelectedObject = null;
+        SelectedTile = null;
+
         foreach (var d in Directives)
         {
             d.IsApplied = false;
@@ -132,31 +195,63 @@ public partial class MainViewModel : ObservableObject
         foreach (var s in MetricSeries)
             s.Reset();
 
+        BindRadioLog(_runner.World);
         RefreshWorldBinding();
-        StatusText = "World created. Apply tick-0 directives or press Run.";
         UpdateTickText();
         RefreshMetrics();
         RefreshLegend();
+        RefreshSelectionSummary();
     }
 
-    /// <summary>Append the draft fields as a new directive (not yet applied).</summary>
+    private static WorldOptions CloneOptions(WorldOptions o) => new()
+    {
+        Title = o.Title,
+        TileCount = o.TileCount,
+        TileSizePx = o.TileSizePx,
+        TileShape = o.TileShape
+    };
+
+    /// <summary>Clear the radio traffic panel.</summary>
     [RelayCommand]
+    private void ClearRadioLog()
+    {
+        RadioLog.Clear();
+        _runner.World?.Radio.Clear();
+    }
+
+    partial void OnDraftDeployerNameChanged(string value)
+    {
+        RebuildDraftFields();
+        AddDirectiveCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Append the draft as a new directive once all required fields are valid.</summary>
+    [RelayCommand(CanExecute = nameof(CanAddDirective))]
     private void AddDirective()
     {
+        if (!TryBuildDraftOptions(out var options, out var error))
+        {
+            DraftValidationMessage = error ?? "Invalid parameters.";
+            return;
+        }
+
         var d = new EnvironmentDirective
         {
             AtTick = DraftAtTick,
             DeployerName = DraftDeployerName,
-            AgentCount = DraftAgentCount,
-            AgentTypeName = DraftAgentTypeName,
-            AdversaryCount = DraftAdversaryCount,
-            AdversaryTypeName = DraftAdversaryTypeName,
-            IncidentCount = DraftIncidentCount
+            Parameters = DeployerParameterCatalog.Capture(options)
         };
         Directives.Add(d);
         SelectedDirective = d;
-        StatusText = $"Added directive: {d.Summary}";
+        DraftValidationMessage = "";
+        StatusText = $"Added: {d.Summary}";
     }
+
+    private bool CanAddDirective() =>
+        _deployerFactories.ContainsKey(DraftDeployerName) &&
+        DraftFields.All(f => f.IsValid) &&
+        TryBuildDraftOptions(out var options, out _) &&
+        DeployerParameterCatalog.TryValidate(options, out _);
 
     /// <summary>Remove the selected directive from the log.</summary>
     [RelayCommand]
@@ -168,8 +263,8 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Stamp the draft (or selected) directive at the current tick and apply it immediately.
-    /// Simulation should be paused for mid-run injections.
+    /// Stamp an unapplied selected directive (or a new draft) at the current tick and apply due items.
+    /// Prefer scheduling via Add + Step/Run; this is for mid-run injection while paused.
     /// </summary>
     [RelayCommand]
     private void ApplyDirectiveNow()
@@ -181,36 +276,22 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        EnvironmentDirective d;
         if (SelectedDirective is { IsApplied: false } sel)
         {
-            d = sel;
-            d.AtTick = _runner.World.CurrentTick;
+            sel.AtTick = _runner.World.CurrentTick;
+        }
+        else if (CanAddDirective())
+        {
+            DraftAtTick = _runner.World.CurrentTick;
+            AddDirective();
         }
         else
         {
-            d = new EnvironmentDirective
-            {
-                AtTick = _runner.World.CurrentTick,
-                DeployerName = DraftDeployerName,
-                AgentCount = DraftAgentCount,
-                AgentTypeName = DraftAgentTypeName,
-                AdversaryCount = DraftAdversaryCount,
-                AdversaryTypeName = DraftAdversaryTypeName,
-                IncidentCount = DraftIncidentCount
-            };
-            Directives.Add(d);
-            SelectedDirective = d;
+            StatusText = "Select an unapplied directive or complete the draft, then Apply now.";
+            return;
         }
 
-        if (TryApplyDirective(d))
-        {
-            RefreshWorldBinding();
-            UpdateTickText();
-            RefreshMetrics();
-            RefreshLegend();
-            StatusText = $"Applied: {d.Summary}";
-        }
+        ApplyDueDirectives();
     }
 
     /// <summary>Apply all due unapplied directives for the current tick without advancing time.</summary>
@@ -223,6 +304,7 @@ public partial class MainViewModel : ObservableObject
         UpdateTickText();
         RefreshMetrics();
         RefreshLegend();
+        RefreshSelectionSummary();
         StatusText = n == 0 ? "No due directives." : $"Applied {n} directive(s) at tick {_runner.World.CurrentTick}.";
     }
 
@@ -246,20 +328,73 @@ public partial class MainViewModel : ObservableObject
             _frameDirectory = null;
             StatusText = "Running…";
         }
+
+        if (RecordVideo)
+        {
+            _videoRecorder.Begin();
+            StatusText = RecordFrames
+                ? $"Running (PNG + video)…"
+                : "Running (recording video)…";
+        }
+
         _autoStopAt = long.MaxValue;
         IsRunning = true;
         _runTimer.Start();
     }
 
-    /// <summary>Stop the automatic runner timer.</summary>
+    /// <summary>Stop the automatic runner timer and finalize video if recording.</summary>
     [RelayCommand]
-    private void Stop()
+    private void Stop() => Stop(finalizeVideo: true);
+
+    private void Stop(bool finalizeVideo)
     {
         _runTimer.Stop();
         IsRunning = false;
+
+        if (finalizeVideo && RecordVideo && _videoRecorder.IsRecording)
+            FinalizeVideoRecording();
+        else if (!finalizeVideo)
+            _videoRecorder.Clear();
+
         StatusText = _frameDirectory is not null
             ? $"Stopped. Frames in {_frameDirectory}"
             : "Stopped.";
+    }
+
+    private void FinalizeVideoRecording()
+    {
+        if (_videoRecorder.FrameCount == 0)
+        {
+            _videoRecorder.Clear();
+            StatusText = "Stopped (no video frames captured).";
+            return;
+        }
+
+        var dlg = new SaveFileDialog
+        {
+            Filter = "AVI Video|*.avi",
+            FileName = $"sim-{DateTime.Now:yyyyMMdd-HHmmss}.avi"
+        };
+        if (dlg.ShowDialog() != true)
+        {
+            _videoRecorder.Clear();
+            return;
+        }
+
+        var fps = Math.Clamp(1000.0 / Math.Max(1, TickDelayMs), 1, 60);
+        try
+        {
+            if (_videoRecorder.SaveAvi(dlg.FileName, fps))
+                StatusText = $"Stopped. Video saved: {dlg.FileName} ({fps:0.#} fps)";
+            else
+                StatusText = "Stopped (no video frames).";
+        }
+        catch (Exception ex)
+        {
+            _videoRecorder.Clear();
+            MessageBox.Show($"Failed to write AVI:\n{ex.Message}", "Record video");
+            StatusText = "Stopped (video save failed).";
+        }
     }
 
     /// <summary>Pin the selected catalog metric into the live metrics list.</summary>
@@ -320,10 +455,15 @@ public partial class MainViewModel : ObservableObject
         var dlg = new OpenFileDialog { Filter = "Scenario JSON|*.json" };
         if (dlg.ShowDialog() != true) return;
 
-        Stop();
+        Stop(finalizeVideo: false);
+        _videoRecorder.Clear();
         var doc = ScenarioSerializer.Load(dlg.FileName);
-        _runner.Reset(doc.ToWorldOptions(), doc.Seed);
+        _lastWorldOptions = doc.ToWorldOptions();
+        _lastSeed = doc.Seed;
+        _runner.Reset(_lastWorldOptions, _lastSeed);
         var world = _runner.World!;
+        SelectedObject = null;
+        SelectedTile = null;
 
         foreach (var d in Directives)
         {
@@ -359,6 +499,7 @@ public partial class MainViewModel : ObservableObject
         UpdateTickText();
         RefreshMetrics();
         RefreshLegend();
+        RefreshSelectionSummary();
     }
 
     /// <summary>
@@ -378,46 +519,39 @@ public partial class MainViewModel : ObservableObject
             MessageBoxImage.Question);
         if (result != MessageBoxResult.Yes) return;
 
-        var template = Directives.FirstOrDefault(d => d.AtTick == 0) ?? new EnvironmentDirective
+        var tick0 = Directives.Where(d => d.AtTick == 0).ToList();
+        if (tick0.Count == 0)
         {
-            AtTick = 0,
-            DeployerName = DraftDeployerName,
-            AgentCount = DraftAgentCount,
-            AgentTypeName = DraftAgentTypeName,
-            AdversaryCount = DraftAdversaryCount,
-            AdversaryTypeName = DraftAdversaryTypeName,
-            IncidentCount = DraftIncidentCount
-        };
+            MessageBox.Show("Add at least one tick-0 environment directive first.", "Run Experiment");
+            return;
+        }
 
         var coverage = new CoverageWatcher(1);
         var connectivity = new ConnectivityWatcher(1);
+        var clearance = new IncidentClearanceWatcher(1);
+        var trustTel = new TrustTelemetryWatcher(5);
         var runner = new Core.World.SimulationRunner();
         runner.AddWatcher(coverage);
         runner.AddWatcher(connectivity);
+        runner.AddWatcher(clearance);
+        runner.AddWatcher(trustTel);
 
-        if (!_deployers.TryGetValue(template.DeployerName, out var deployer))
-            deployer = new RandomDeployer();
-
+        var steps = tick0.Select(ToDeployStep).ToList();
         var manifest = runner.RunExperiment(new Core.World.ExperimentRequest
         {
             ExperimentName = "gui-batch",
             BaseSeed = 100,
             Trials = 5,
             TicksPerTrial = 200,
-            WorldOptions = new WorldOptions
-            {
-                Title = "Batch",
-                TileCount = new GridSize(12, 12),
-                TileSizePx = new GridSize(40, 40)
-            },
-            Deployer = deployer,
-            DeployRequest = BuildDeployRequest(template, salt: 0),
+            WorldOptions = CloneOptions(_lastWorldOptions),
+            Steps = steps,
+            Context = CreateDeployContext(0),
             Notes = "Launched from GUI"
         });
 
         var dir = Path.Combine(Environment.CurrentDirectory, "experiments",
             $"{manifest.ExperimentName}-{DateTime.Now:yyyyMMdd-HHmmss}");
-        ExperimentExporter.Export(dir, manifest, new IWatcher[] { coverage, connectivity });
+        ExperimentExporter.Export(dir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel });
         StatusText = $"Experiment exported to {dir}";
         MessageBox.Show($"Exported to:\n{dir}", "Done");
     }
@@ -483,13 +617,12 @@ public partial class MainViewModel : ObservableObject
         if (_runner.World is null) return false;
         try
         {
-            if (!_deployers.TryGetValue(d.DeployerName, out var deployer))
+            if (!_deployerFactories.ContainsKey(d.DeployerName))
                 throw new InvalidOperationException($"Unknown deployer '{d.DeployerName}'.");
 
             var salt = unchecked((int)d.AtTick * 1009 ^ d.Id);
-            var request = BuildDeployRequest(d, salt);
-            // Additive: do not ClearEntities (supports mid-run injections and multiple tick-0 rows).
-            deployer.Deploy(_runner.World, request);
+            var step = ToDeployStep(d);
+            _runner.AttachDeployer(step, CreateDeployContext(salt));
             d.IsApplied = true;
             d.Status = "applied";
             return true;
@@ -502,25 +635,100 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private DeployRequest BuildDeployRequest(EnvironmentDirective d, int salt)
+    private DeployStep ToDeployStep(EnvironmentDirective d)
     {
-        var honestFactory = _factories.Get(d.AgentTypeName);
-        Func<string, Agent>? advFactory = null;
-        if (d.AdversaryCount > 0)
-            advFactory = _ => _factories.Get(d.AdversaryTypeName).Create();
-
-        return new DeployRequest
+        if (!_deployerFactories.TryGetValue(d.DeployerName, out var factory))
+            throw new InvalidOperationException($"Unknown deployer '{d.DeployerName}'.");
+        var prototype = factory();
+        var options = DeployerParameterCatalog.Materialize(prototype.OptionsType, d.Parameters);
+        return new DeployStep
         {
-            AgentCount = d.AgentCount,
-            IncidentCount = d.IncidentCount,
-            AgentTypeName = d.AgentTypeName,
-            SensorRange = d.SensorRange,
-            AgentFactory = _ => honestFactory.Create(),
-            AdversaryCount = d.AdversaryCount,
-            AdversaryFactory = advFactory,
-            DeploySigma = d.DeploySigma,
-            RandomSalt = salt
+            CreateDeployer = factory,
+            Options = options
         };
+    }
+
+    private DeployContext CreateDeployContext(int salt) => new()
+    {
+        RandomSalt = salt,
+        ResolveAgent = name => _factories.Get(name).Create()
+    };
+
+    private void RebuildDraftFields()
+    {
+        foreach (var f in DraftFields)
+            f.PropertyChanged -= OnDraftFieldPropertyChanged;
+        DraftFields.Clear();
+
+        if (!_deployerFactories.TryGetValue(DraftDeployerName, out var factory))
+            return;
+
+        var options = factory().CreateOptions();
+        foreach (var info in DeployerParameterCatalog.Describe(options.GetType()))
+        {
+            var field = new DirectiveParameterField(info, info.Property.GetValue(options), AgentTypeNames, IncidentTypeNames);
+            field.PropertyChanged += OnDraftFieldPropertyChanged;
+            DraftFields.Add(field);
+        }
+
+        RefreshDraftValidation();
+    }
+
+    private void OnDraftFieldPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(DirectiveParameterField.IsValid)
+            or nameof(DirectiveParameterField.TextValue)
+            or nameof(DirectiveParameterField.BoolValue)
+            or nameof(DirectiveParameterField.ChoiceValue))
+        {
+            RefreshDraftValidation();
+            AddDirectiveCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private void RefreshDraftValidation()
+    {
+        if (!TryBuildDraftOptions(out var options, out var error))
+        {
+            DraftValidationMessage = error ?? "";
+            return;
+        }
+
+        DraftValidationMessage = DeployerParameterCatalog.TryValidate(options, out var err)
+            ? ""
+            : err ?? "";
+    }
+
+    private bool TryBuildDraftOptions(out object options, out string? error)
+    {
+        options = null!;
+        error = null;
+        if (!_deployerFactories.TryGetValue(DraftDeployerName, out var factory))
+        {
+            error = $"Unknown deployer '{DraftDeployerName}'.";
+            return false;
+        }
+
+        try
+        {
+            foreach (var f in DraftFields)
+            {
+                if (!f.IsValid)
+                {
+                    error = $"Invalid value for {f.Label}.";
+                    return false;
+                }
+            }
+
+            var map = DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal);
+            options = DeployerParameterCatalog.Materialize(factory().OptionsType, map);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     private void OnTickCompleted()
@@ -531,11 +739,17 @@ public partial class MainViewModel : ObservableObject
             RefreshMetrics();
             RefreshLegend();
             RefreshWorldBinding();
+            if (SelectedTile is not null)
+                RefreshSelectionSummary();
 
-            if (RecordFrames && Canvas is not null && _frameDirectory is not null && World is not null)
+            var every = Math.Max(1, FrameEveryNTicks);
+            if (World is not null && World.CurrentTick % every == 0)
             {
-                if (World.CurrentTick % Math.Max(1, FrameEveryNTicks) == 0)
+                if (RecordFrames && Canvas is not null && _frameDirectory is not null)
                     FrameCapture.CaptureTick(Canvas, _frameDirectory, World.CurrentTick);
+
+                if (RecordVideo && _videoRecorder.IsRecording && Canvas is not null)
+                    _videoRecorder.CaptureFrame(Canvas);
             }
         });
     }
@@ -543,13 +757,97 @@ public partial class MainViewModel : ObservableObject
     private void RefreshWorldBinding()
     {
         var w = _runner.World;
+        BindRadioLog(w);
         World = null;
         World = w;
         Canvas?.Refresh();
     }
 
+    private void BindRadioLog(SimWorld? world)
+    {
+        if (_boundRadio is not null)
+            _boundRadio.EntryAdded -= OnRadioEntryAdded;
+        _boundRadio = world?.Radio;
+        RadioLog.Clear();
+        if (_boundRadio is null) return;
+
+        foreach (var e in _boundRadio.Entries)
+            RadioLog.Add(new RadioLogLine(e));
+        _boundRadio.EntryAdded += OnRadioEntryAdded;
+    }
+
+    private void OnRadioEntryAdded(RadioLogEntry entry)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            AppendRadioLine(entry);
+        else
+            dispatcher.BeginInvoke(() => AppendRadioLine(entry));
+    }
+
+    private void AppendRadioLine(RadioLogEntry entry)
+    {
+        RadioLog.Add(new RadioLogLine(entry));
+        while (RadioLog.Count > 500)
+            RadioLog.RemoveAt(0);
+    }
+
     private void UpdateTickText() =>
         TickText = $"Tick {World?.CurrentTick ?? 0}  |  Agents {World?.Agents.Count ?? 0}  |  Incidents {World?.Incidents.Count(i => !i.IsDepleted) ?? 0}";
+
+    private void RefreshSelectionSummary()
+    {
+        if (SelectedObject is not null)
+        {
+            SelectionSummary = SelectedObject switch
+            {
+                Agent a => $"Agent #{a.Id} ({a.AgentType})\nPos: ({a.Position.X:F1}, {a.Position.Y:F1})\nRange: {a.SensorRange}\nReward: {a.TotalReward:F3}",
+                Incident i => $"Incident #{i.Id} ({i.IncidentType})\nPos: ({i.Position.X:F1}, {i.Position.Y:F1})\nIntensity: {i.Intensity:F3}",
+                Message m => $"Message #{m.Id}\nFrom: {m.FromAgentType} (#{m.FromAgentId})\nPos: ({m.Position.X:F1}, {m.Position.Y:F1})\nTTL: {m.Ttl}\n{m.Payload}",
+                _ => "Nothing selected"
+            };
+            return;
+        }
+
+        if (SelectedTile is not null && World is not null)
+        {
+            var tile = SelectedTile;
+            // Re-resolve from current world grid in case world was replaced.
+            if (tile.Col < World.Options.TileCount.Width && tile.Row < World.Options.TileCount.Height)
+                tile = World.Tiles[tile.Col, tile.Row];
+
+            var tw = World.Options.TileSizePx.Width;
+            var th = World.Options.TileSizePx.Height;
+            var objects = World.ObjectsInTile(tile).ToList();
+            var sb = new StringBuilder();
+            sb.AppendLine($"Tile ({tile.Col}, {tile.Row})");
+            sb.AppendLine($"Size: {tw}×{th} px");
+            sb.AppendLine($"Center: ({tile.Center.X:F1}, {tile.Center.Y:F1})");
+            sb.AppendLine(tile.LastCoveredTick < 0
+                ? "Last covered: never"
+                : $"Last covered: tick {tile.LastCoveredTick}");
+            sb.AppendLine($"Objects ({objects.Count}):");
+            if (objects.Count == 0)
+                sb.Append("  (empty)");
+            else
+            {
+                foreach (var o in objects)
+                {
+                    sb.AppendLine(o switch
+                    {
+                        Agent a => $"  Agent #{a.Id} {a.AgentType}",
+                        Incident i => $"  Incident #{i.Id} {i.IncidentType}",
+                        Message m => $"  Message #{m.Id} {m.FromAgentType}",
+                        _ => $"  {o.GetType().Name} #{o.Id}"
+                    });
+                }
+            }
+            SelectionSummary = sb.ToString().TrimEnd();
+            return;
+        }
+
+        SelectionSummary = "Nothing selected";
+    }
 
     private void RefreshLegend()
     {
@@ -676,20 +974,29 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private void SeedDefaultDirective()
+    private void SeedDefaultDirectives()
     {
         Directives.Add(new EnvironmentDirective
         {
             AtTick = 0,
             DeployerName = "Gaussian",
-            AgentCount = 10,
-            AgentTypeName = "OrbitingCoop",
-            AdversaryCount = 0,
-            IncidentCount = 5
+            Parameters = DeployerParameterCatalog.Capture(new GaussianDeployOptions
+            {
+                Count = 10,
+                TypeName = "OrbitingCoop"
+            })
+        });
+        Directives.Add(new EnvironmentDirective
+        {
+            AtTick = 0,
+            DeployerName = "PeriodicIncidents",
+            Parameters = DeployerParameterCatalog.Capture(new PeriodicIncidentOptions
+            {
+                PeriodTicks = 25,
+                Count = 1
+            })
         });
         SelectedDirective = Directives[0];
-        DraftDeployerName = "Gaussian";
-        DraftAgentTypeName = "OrbitingCoop";
     }
 
     private void RegisterFactories()
@@ -707,8 +1014,16 @@ public partial class MainViewModel : ObservableObject
 
     private void RegisterDeployers()
     {
-        void Add(IDeployer d) => _deployers[d.Name] = d;
-        Add(new RandomDeployer());
-        Add(new GaussianDeployer());
+        void Add(Func<IDeployer> factory)
+        {
+            var sample = factory();
+            _deployerFactories[sample.Name] = factory;
+        }
+
+        Add(() => new RandomDeployer());
+        Add(() => new GaussianDeployer());
+        Add(() => new UniformIncidentDeployer());
+        Add(() => new PeriodicIncidentDeployer());
+        Add(() => new PlaceNearDeployer());
     }
 }

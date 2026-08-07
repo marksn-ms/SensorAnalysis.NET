@@ -4,82 +4,71 @@ using SensorAnalysis.Core.World;
 
 namespace SensorAnalysis.Agents.Deployers;
 
+/// <summary>Options for <see cref="GaussianDeployer"/> — one agent kind per directive.</summary>
+public sealed class GaussianDeployOptions
+{
+    /// <summary>How many agents to place.</summary>
+    [DeployerParam("Count")]
+    public int Count { get; set; } = 10;
+
+    /// <summary>Agent factory name.</summary>
+    [DeployerParam("Type", IsAgentType = true)]
+    public string TypeName { get; set; } = "OrbitingCoop";
+
+    /// <summary>Sensor range for placed agents.</summary>
+    [DeployerParam("Sensor range")]
+    public double SensorRange { get; set; } = 80;
+
+    /// <summary>Gaussian σ about world center.</summary>
+    [DeployerParam("Deploy sigma")]
+    public double DeploySigma { get; set; } = 80;
+}
+
 /// <summary>
-/// Honest agents: Gaussian footprint about a drop point (aircraft dispersal).
-/// Adversaries: uniform random over the world (not co-dropped with the swarm).
-/// Incidents: uniform by default so regimes share the same spatial difficulty;
-/// optional near-adversary placement remains available as an explicit stress flag.
+/// Immediate deployer: Gaussian drop of <see cref="GaussianDeployOptions.Count"/> agents of one type.
 /// </summary>
 public sealed class GaussianDeployer : IDeployer
 {
+    private bool _dormant;
+
     /// <inheritdoc />
     public string Name => "Gaussian";
 
     /// <inheritdoc />
-    public string Description =>
-        "Gaussian honest drop; uniform random adversaries; uniform incidents (optional near-adv).";
+    public string Description => "Immediate: Gaussian drop of Count agents of Type; then dormant.";
 
     /// <inheritdoc />
-    public void Deploy(SimWorld world, DeployRequest request)
+    public bool IsDormant => _dormant;
+
+    /// <inheritdoc />
+    public Type OptionsType => typeof(GaussianDeployOptions);
+
+    /// <inheritdoc />
+    public object CreateOptions() => new GaussianDeployOptions();
+
+    /// <inheritdoc />
+    public void Attach(SimWorld world, object options, DeployContext context)
     {
-        var rng = new Random(unchecked(world.Seed ^ request.RandomSalt));
-        var w = world.WorldWidthPx;
-        var h = world.WorldHeightPx;
-        var drop = request.DropPoint ?? new Vec2(w / 2.0, h / 2.0);
-        var sigma = Math.Max(1.0, request.DeploySigma);
+        var o = (GaussianDeployOptions)options;
+        var rng = new Random(unchecked(world.Seed ^ context.RandomSalt));
+        var drop = new Vec2(world.WorldWidthPx / 2.0, world.WorldHeightPx / 2.0);
+        var sigma = Math.Max(1.0, o.DeploySigma);
+        var n = Math.Max(0, o.Count);
 
-        var adversaryCount = Math.Clamp(request.AdversaryCount, 0, request.AgentCount);
-        var honestCount = request.AgentCount - adversaryCount;
-
-        if (adversaryCount > 0 && request.AdversaryFactory is null)
-            throw new InvalidOperationException("AdversaryFactory is required when AdversaryCount > 0.");
-
-        for (int i = 0; i < honestCount; i++)
+        for (int i = 0; i < n; i++)
         {
-            var agent = request.AgentFactory(request.AgentTypeName);
+            var agent = context.ResolveAgent(o.TypeName);
             agent.Position = SampleGaussian(rng, drop, sigma, world);
-            agent.SensorRange = request.SensorRange;
+            agent.SensorRange = o.SensorRange;
             agent.Label = $"{agent.AgentType}-{i}";
             world.Add(agent);
         }
 
-        var adversaries = new List<Agent>();
-        for (int i = 0; i < adversaryCount; i++)
-        {
-            var agent = request.AdversaryFactory!(request.AgentTypeName);
-            // Infiltrators are not part of the aircraft Gaussian drop.
-            agent.Position = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
-            agent.SensorRange = request.SensorRange;
-            agent.Label = $"{agent.AgentType}-adv-{i}";
-            world.Add(agent);
-            adversaries.Add(agent);
-        }
-
-        for (int i = 0; i < request.IncidentCount; i++)
-        {
-            Vec2 pos;
-            if (request.PlaceIncidentsNearAdversaries && adversaries.Count > 0)
-            {
-                var host = adversaries[rng.Next(adversaries.Count)];
-                var radius = host.SensorRange * (0.25 + 0.5 * rng.NextDouble());
-                var angle = rng.NextDouble() * Math.PI * 2;
-                pos = world.Wrap(new Vec2(
-                    host.Position.X + Math.Cos(angle) * radius,
-                    host.Position.Y + Math.Sin(angle) * radius));
-            }
-            else
-            {
-                pos = new Vec2(rng.NextDouble() * w, rng.NextDouble() * h);
-            }
-
-            world.Add(new Incident
-            {
-                Position = pos,
-                Intensity = 1.0,
-                Label = $"I-{i}"
-            });
-        }
+        _dormant = true;
     }
+
+    /// <inheritdoc />
+    public void Tick(WorldContext ctx) { }
 
     private static Vec2 SampleGaussian(Random rng, Vec2 mean, double sigma, SimWorld world)
     {

@@ -34,14 +34,27 @@ public class ExporterTests
                     TileCount = new GridSize(4, 4),
                     TileSizePx = new GridSize(20, 20)
                 },
-                Deployer = new RandomDeployer(),
-                DeployRequest = new DeployRequest
+                Steps =
+                [
+                    new DeployStep
+                    {
+                        CreateDeployer = () => new RandomDeployer(),
+                        Options = new RandomDeployOptions
+                        {
+                            Count = 3,
+                            TypeName = "RandomWalk",
+                            SensorRange = 40
+                        }
+                    },
+                    new DeployStep
+                    {
+                        CreateDeployer = () => new UniformIncidentDeployer(),
+                        Options = new UniformIncidentOptions { Count = 2 }
+                    }
+                ],
+                Context = new DeployContext
                 {
-                    AgentCount = 3,
-                    IncidentCount = 2,
-                    AgentTypeName = "RandomWalk",
-                    AgentFactory = _ => new RandomWalkAgent(),
-                    SensorRange = 40
+                    ResolveAgent = _ => new RandomWalkAgent()
                 }
             });
 
@@ -51,7 +64,7 @@ public class ExporterTests
             File.Exists(Path.Combine(dir, "metrics.csv")).Should().BeTrue();
 
             var csv = File.ReadAllLines(Path.Combine(dir, "metrics.csv"));
-            csv.Length.Should().BeGreaterThan(1); // header + rows
+            csv.Length.Should().BeGreaterThan(1);
             csv[0].Should().Contain("Coverage.tick");
         }
         finally

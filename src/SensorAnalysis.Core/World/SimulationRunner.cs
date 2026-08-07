@@ -44,7 +44,6 @@ public sealed class SimulationRunner
 
     /// <summary>
     /// Initialize or replace the internal <see cref="SimWorld"/> instance with the provided options and seed.
-    /// After calling <see cref="Reset"/>, the <see cref="World"/> property will be non-null.
     /// </summary>
     /// <param name="options">World construction options.</param>
     /// <param name="seed">Random seed used to initialize the world deterministically.</param>
@@ -55,16 +54,33 @@ public sealed class SimulationRunner
     }
 
     /// <summary>
-    /// Clear existing entities in the world and run the provided deployer to populate agents/incidents.
+    /// Clears entities and deployers, then attaches each step in order.
+    /// CLI and UI both use this path so schedules stay aligned.
     /// </summary>
-    /// <param name="deployer">The deployer implementation that places agents and incidents into the world.</param>
-    /// <param name="request">Deployment parameters (counts, types, factory callbacks).</param>
+    /// <param name="steps">Ordered deploy steps for the trial.</param>
+    /// <param name="context">Agent resolution and base RNG salt.</param>
     /// <exception cref="InvalidOperationException">Thrown if <see cref="Reset"/> has not been called first.</exception>
-    public void Deploy(IDeployer deployer, DeployRequest request)
+    public void Deploy(IReadOnlyList<DeployStep> steps, DeployContext context)
     {
         if (World is null) throw new InvalidOperationException("Call Reset first.");
         World.ClearEntities();
-        deployer.Deploy(World, request);
+        World.ClearDeployers();
+        foreach (var step in steps)
+            AttachDeployer(step, context);
+    }
+
+    /// <summary>
+    /// Additive attach used by the GUI directive log (does not clear the world).
+    /// Always constructs a fresh deployer instance so ticking state is not shared.
+    /// </summary>
+    /// <param name="step">Deployer factory + options.</param>
+    /// <param name="context">Agent resolution and RNG salt (directive id mixed in by caller).</param>
+    public void AttachDeployer(DeployStep step, DeployContext context)
+    {
+        if (World is null) throw new InvalidOperationException("Call Reset first.");
+        var deployer = step.CreateDeployer();
+        deployer.Attach(World, step.Options, context);
+        World.AddDeployer(deployer);
     }
 
     /// <summary>Single interactive step.</summary>
@@ -79,7 +95,6 @@ public sealed class SimulationRunner
 
     /// <summary>
     /// Run <paramref name="ticks"/> ticks synchronously.
-    /// Cancellation is cooperative via <paramref name="ct"/>.
     /// </summary>
     /// <param name="ticks">Number of ticks to execute.</param>
     /// <param name="ct">Cancellation token to stop execution early.</param>
@@ -104,13 +119,15 @@ public sealed class SimulationRunner
     /// <summary>
     /// Full multi-trial experiment. Returns a manifest ready for <see cref="ExperimentExporter"/>.
     /// </summary>
-    /// <param name="request">Experiment configuration, including number of trials, ticks per trial and deployment details.</param>
-    /// <param name="ct">Optional cancellation token to abort the experiment run.</param>
+    /// <param name="request">Experiment configuration.</param>
+    /// <param name="ct">Optional cancellation token.</param>
     /// <returns>An <see cref="ExperimentManifest"/> describing the completed experiment run.</returns>
     public ExperimentManifest RunExperiment(ExperimentRequest request, CancellationToken ct = default)
     {
         var started = DateTimeOffset.UtcNow;
         string[] agentTypes = Array.Empty<string>();
+        var agentCount = 0;
+        var incidentHint = 0;
 
         for (int trial = 0; trial < request.Trials; trial++)
         {
@@ -119,8 +136,10 @@ public sealed class SimulationRunner
             Reset(request.WorldOptions, seed);
             World!.CurrentTrial = trial;
 
-            Deploy(request.Deployer, request.DeployRequest);
+            Deploy(request.Steps, request.Context);
             agentTypes = World.Agents.Select(a => a.AgentType).Distinct().ToArray();
+            agentCount = World.Agents.Count;
+            incidentHint = World.Incidents.Count;
 
             foreach (var w in _watchers)
                 w.OnTrialStart(World, trial);
@@ -144,12 +163,24 @@ public sealed class SimulationRunner
             WorldTitle = request.WorldOptions.Title,
             TileColumns = request.WorldOptions.TileCount.Width,
             TileRows = request.WorldOptions.TileCount.Height,
-            AgentCount = request.DeployRequest.AgentCount,
-            IncidentCount = request.DeployRequest.IncidentCount,
+            AgentCount = agentCount,
+            IncidentCount = incidentHint,
             AgentTypes = agentTypes,
             Notes = request.Notes
         };
     }
+}
+
+/// <summary>
+/// One deployer attachment: factory + options snapshot.
+/// </summary>
+public sealed class DeployStep
+{
+    /// <summary>Creates a fresh deployer instance (required so ticking state is not shared).</summary>
+    public required Func<IDeployer> CreateDeployer { get; init; }
+
+    /// <summary>Options object matching the deployer's <see cref="IDeployer.OptionsType"/>.</summary>
+    public required object Options { get; init; }
 }
 
 /// <summary>
@@ -160,7 +191,7 @@ public sealed class ExperimentRequest
     /// <summary>Experiment identifier or name.</summary>
     public string ExperimentName { get; set; } = "run";
 
-    /// <summary>Base RNG seed used for the experiment; each trial will use base + trialIndex.</summary>
+    /// <summary>Base RNG seed; each trial uses base + trialIndex.</summary>
     public int BaseSeed { get; set; } = 42;
 
     /// <summary>Number of trials to execute.</summary>
@@ -172,11 +203,11 @@ public sealed class ExperimentRequest
     /// <summary>World options used to construct the simulation world for each trial.</summary>
     public required WorldOptions WorldOptions { get; init; }
 
-    /// <summary>Deployer responsible for placing agents and incidents into the world.</summary>
-    public required IDeployer Deployer { get; init; }
+    /// <summary>Ordered deploy steps applied at the start of each trial.</summary>
+    public required IReadOnlyList<DeployStep> Steps { get; init; }
 
-    /// <summary>Parameters controlling how to deploy agents and incidents.</summary>
-    public required DeployRequest DeployRequest { get; init; }
+    /// <summary>Shared agent resolution for all steps.</summary>
+    public required DeployContext Context { get; init; }
 
     /// <summary>Optional notes attached to the experiment manifest.</summary>
     public string Notes { get; set; } = "";

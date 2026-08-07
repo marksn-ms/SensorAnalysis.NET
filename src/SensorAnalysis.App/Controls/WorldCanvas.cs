@@ -3,6 +3,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using SensorAnalysis.App.Visualization;
 using SensorAnalysis.Core.Domain;
+using SensorAnalysis.Core.Messaging;
 using SensorAnalysis.Core.World;
 
 namespace SensorAnalysis.App.Controls;
@@ -11,6 +12,7 @@ namespace SensorAnalysis.App.Controls;
 /// Renders the simulation world: tiles, agents, incidents, messages.
 /// Supports pan (middle/right drag) and zoom (wheel).
 /// Agent/incident colors and shapes come from <see cref="EntityVisualCatalog"/>.
+/// Left-click selects an entity or a tile.
 /// </summary>
 public class WorldCanvas : FrameworkElement
 {
@@ -27,7 +29,12 @@ public class WorldCanvas : FrameworkElement
     /// <summary>Identifies the <see cref="SelectedObject"/> dependency property.</summary>
     public static readonly DependencyProperty SelectedObjectProperty =
         DependencyProperty.Register(nameof(SelectedObject), typeof(WorldObject), typeof(WorldCanvas),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
+
+    /// <summary>Identifies the <see cref="SelectedTile"/> dependency property.</summary>
+    public static readonly DependencyProperty SelectedTileProperty =
+        DependencyProperty.Register(nameof(SelectedTile), typeof(Tile), typeof(WorldCanvas),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
 
     /// <summary>Simulation world to render, or <c>null</c> when none is loaded.</summary>
     public SimWorld? World
@@ -50,6 +57,13 @@ public class WorldCanvas : FrameworkElement
         set => SetValue(SelectedObjectProperty, value);
     }
 
+    /// <summary>Currently selected tile highlighted with a yellow/white rectangle.</summary>
+    public Tile? SelectedTile
+    {
+        get => (Tile?)GetValue(SelectedTileProperty);
+        set => SetValue(SelectedTileProperty, value);
+    }
+
     /// <summary>
     /// Visual style catalog used for agent/incident markers.
     /// Defaults to <see cref="EntityVisualCatalog.Default"/>.
@@ -64,6 +78,8 @@ public class WorldCanvas : FrameworkElement
     private static readonly Brush MessageBrush = new SolidColorBrush(Color.FromRgb(180, 255, 120));
     private static readonly Brush SelectedFillBrush = new SolidColorBrush(Color.FromRgb(255, 220, 60));
     private static readonly Pen SelectedPen = new(Brushes.White, 1.5);
+    private static readonly Brush SelectedTileFill = new SolidColorBrush(Color.FromArgb(70, 255, 220, 60));
+    private static readonly Pen SelectedTilePen = new(Brushes.White, 2);
     private static readonly Dictionary<string, Brush> BrushCache = new(StringComparer.Ordinal);
 
     static WorldCanvas()
@@ -72,6 +88,8 @@ public class WorldCanvas : FrameworkElement
         MessageBrush.Freeze();
         SelectedFillBrush.Freeze();
         SelectedPen.Freeze();
+        SelectedTileFill.Freeze();
+        SelectedTilePen.Freeze();
     }
 
     /// <summary>Creates a world canvas that accepts focus and clips drawing to its bounds.</summary>
@@ -106,7 +124,17 @@ public class WorldCanvas : FrameworkElement
         if (e.ChangedButton == MouseButton.Left && World is not null)
         {
             var worldPt = ScreenToWorld(e.GetPosition(this));
-            SelectedObject = HitTest(worldPt);
+            var hit = HitTest(worldPt);
+            if (hit is null)
+            {
+                SelectedObject = null;
+                SelectedTile = World.TileAt(worldPt);
+            }
+            else
+            {
+                SelectedTile = null;
+                SelectedObject = hit;
+            }
             InvalidateVisual();
             e.Handled = true;
         }
@@ -161,6 +189,12 @@ public class WorldCanvas : FrameworkElement
                 fill = new SolidColorBrush(Color.FromArgb(alpha, 40, 90, 40));
             }
             dc.DrawRectangle(fill, TilePen, rect);
+
+            if (SelectedTile is not null &&
+                SelectedTile.Col == tile.Col && SelectedTile.Row == tile.Row)
+            {
+                dc.DrawRectangle(SelectedTileFill, SelectedTilePen, rect);
+            }
         }
 
         // Incidents — triangles (or registered shape) by IncidentType
@@ -174,7 +208,13 @@ public class WorldCanvas : FrameworkElement
 
         // Messages — small lime dots (environmental echoes)
         foreach (var msg in World.Messages)
-            DrawEllipseMarker(dc, msg.Position, 3, MessageBrush, z);
+        {
+            var selected = msg.IsSelected || ReferenceEquals(msg, SelectedObject);
+            if (selected)
+                DrawEllipseMarker(dc, msg.Position, 5, SelectedFillBrush, z, SelectedPen);
+            else
+                DrawEllipseMarker(dc, msg.Position, 3, MessageBrush, z);
+        }
 
         // Agents — color/shape by AgentType
         foreach (var agent in World.Agents)
@@ -224,11 +264,11 @@ public class WorldCanvas : FrameworkElement
         }
     }
 
-    private void DrawEllipseMarker(DrawingContext dc, Vec2 worldPos, double radius, Brush brush, double z)
+    private void DrawEllipseMarker(DrawingContext dc, Vec2 worldPos, double radius, Brush brush, double z, Pen? pen = null)
     {
         var pt = WorldToScreenPoint(worldPos);
         var r = radius * Math.Max(0.5, z);
-        dc.DrawEllipse(brush, null, pt, r, r);
+        dc.DrawEllipse(brush, pen, pt, r, r);
     }
 
     private static void DrawPolygon(DrawingContext dc, Brush brush, Pen? pen, params Point[] points)
@@ -263,14 +303,18 @@ public class WorldCanvas : FrameworkElement
     private Vec2 ScreenToWorld(Point s) =>
         new((s.X - _panOffset.X) / Zoom, (s.Y - _panOffset.Y) / Zoom);
 
-    private WorldObject? HitTest(Vec2 worldPt)
+    /// <summary>
+    /// Hit-tests agents, then incidents, then messages within <paramref name="hitR"/> world units.
+    /// </summary>
+    private WorldObject? HitTest(Vec2 worldPt, double hitR = 10)
     {
         if (World is null) return null;
-        const double hitR = 10;
         foreach (var a in World.Agents)
             if (World.Distance(a.Position, worldPt) <= hitR) return a;
         foreach (var i in World.Incidents)
             if (!i.IsDepleted && World.Distance(i.Position, worldPt) <= hitR) return i;
+        foreach (var m in World.Messages)
+            if (World.Distance(m.Position, worldPt) <= hitR) return m;
         return null;
     }
 

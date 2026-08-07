@@ -1,3 +1,4 @@
+using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.Messaging;
 using SensorAnalysis.Core.Metrics;
@@ -5,7 +6,7 @@ using SensorAnalysis.Core.Metrics;
 namespace SensorAnalysis.Core.World;
 
 /// <summary>
-/// The simulated environment: grid of tiles, agents, incidents, and messages.
+/// The simulated environment: grid of tiles, agents, incidents, messages, and ticking deployers.
 /// Deterministic given a fixed seed and identical agent decisions.
 /// </summary>
 public sealed class SimWorld
@@ -13,8 +14,10 @@ public sealed class SimWorld
     private readonly List<Agent> _agents = new();
     private readonly List<Incident> _incidents = new();
     private readonly List<Message> _messages = new();
+    private readonly List<IDeployer> _deployers = new();
     private readonly Tile[,] _tiles;
     private readonly Random _rng;
+    private readonly RadioTrafficLog _radio = new();
 
     /// <summary>
     /// Creates a new world from options and a deterministic seed.
@@ -59,6 +62,16 @@ public sealed class SimWorld
     /// <summary>Messages / markers currently in the world.</summary>
     public IReadOnlyList<Message> Messages => _messages;
 
+    /// <summary>
+    /// Registered deployers ticked before agents each step (immediate then dormant, or periodic).
+    /// </summary>
+    public IReadOnlyList<IDeployer> Deployers => _deployers;
+
+    /// <summary>
+    /// Global radio traffic log (narrated Transmit events). Cleared with entities on demand by the UI.
+    /// </summary>
+    public RadioTrafficLog Radio => _radio;
+
     /// <summary>Two-dimensional tile grid indexed by <c>[col, row]</c>.</summary>
     public Tile[,] Tiles => _tiles;
 
@@ -80,13 +93,22 @@ public sealed class SimWorld
     /// <param name="message">Message instance to add.</param>
     public void Add(Message message) => _messages.Add(message);
 
+    /// <summary>
+    /// Registers a deployer to receive <see cref="IDeployer.Tick"/> before agents each world tick.
+    /// </summary>
+    /// <param name="deployer">Deployer already configured via <see cref="IDeployer.Attach"/>.</param>
+    public void AddDeployer(IDeployer deployer) => _deployers.Add(deployer);
+
+    /// <summary>Removes all registered deployers (does not clear agents/incidents).</summary>
+    public void ClearDeployers() => _deployers.Clear();
+
     /// <summary>Lookup an agent by runtime id, or <c>null</c> if not present.</summary>
     public Agent? FindAgent(int id) => _agents.FirstOrDefault(a => a.Id == id);
 
     /// <summary>Active (non-depleted) incidents — used by privileged oracles and telemetry.</summary>
     public IEnumerable<Incident> ActiveIncidents => _incidents.Where(i => !i.IsDepleted);
 
-    /// <summary>Removes all agents, incidents, and messages (tiles are retained).</summary>
+    /// <summary>Removes all agents, incidents, and messages (tiles and deployers are retained).</summary>
     public void ClearEntities()
     {
         _agents.Clear();
@@ -114,6 +136,32 @@ public sealed class SimWorld
     /// <returns>Minimum-image displacement vector.</returns>
     public Vec2 Displacement(Vec2 from, Vec2 to) =>
         Vec2.ToroidalDisplacement(from, to, WorldWidthPx, WorldHeightPx);
+
+    /// <summary>Returns entities whose positions fall inside the axis-aligned tile rectangle.</summary>
+    /// <param name="tile">Tile to query.</param>
+    /// <returns>Agents, active incidents, and messages currently in the tile.</returns>
+    public IEnumerable<WorldObject> ObjectsInTile(Tile tile)
+    {
+        var tw = Options.TileSizePx.Width;
+        var th = Options.TileSizePx.Height;
+        var x0 = tile.Col * tw;
+        var y0 = tile.Row * th;
+        var x1 = x0 + tw;
+        var y1 = y0 + th;
+
+        bool Inside(Vec2 p)
+        {
+            p = Wrap(p);
+            return p.X >= x0 && p.X < x1 && p.Y >= y0 && p.Y < y1;
+        }
+
+        foreach (var a in _agents)
+            if (Inside(a.Position)) yield return a;
+        foreach (var i in _incidents)
+            if (!i.IsDepleted && Inside(i.Position)) yield return i;
+        foreach (var m in _messages)
+            if (Inside(m.Position)) yield return m;
+    }
 
     /// <summary>Returns the tile containing <paramref name="p"/> (coordinates are wrapped first).</summary>
     /// <param name="p">Point in world coordinates.</param>
@@ -182,6 +230,15 @@ public sealed class SimWorld
         };
         Add(message);
 
+        _radio.Record(
+            CurrentTick,
+            message.Id,
+            message.FromAgentId,
+            message.FromAgentType,
+            message.Payload,
+            sender.Position,
+            sender.SensorRange);
+
         var info = new MessageInfo(
             message.Id,
             message.Position,
@@ -210,6 +267,13 @@ public sealed class SimWorld
             World = this,
             Rng = _rng
         };
+
+        // 0. Deployers act first (waves / dormant immediate no-ops)
+        foreach (var deployer in _deployers)
+        {
+            if (!deployer.IsDormant)
+                deployer.Tick(ctx);
+        }
 
         // 1. Agents decide and move
         foreach (var agent in _agents)

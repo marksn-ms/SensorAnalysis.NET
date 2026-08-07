@@ -1,90 +1,65 @@
+using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.World;
 
 namespace SensorAnalysis.Core.Deployment;
 
 /// <summary>
-/// Places agents (and optionally incidents) into a world at the start of a trial.
-/// Classic SensorAnalysis "Deployer" concept.
+/// First-class world citizen that can place entities and optionally keep acting each tick.
+/// Immediate deployers place once in <see cref="Attach"/> then become dormant;
+/// periodic deployers keep spawning on their schedule from <see cref="Tick"/>.
+/// Configuration is an options object whose public properties (marked with
+/// <see cref="DeployerParamAttribute"/>) drive the UI form.
 /// </summary>
 public interface IDeployer
 {
-    /// <summary>
-    /// Gets the unique name of this deployer implementation. Used for display and selection in UIs and configuration.
-    /// </summary>
+    /// <summary>Unique name for UI/CLI selection.</summary>
     string Name { get; }
 
-    /// <summary>
-    /// Gets a short human-readable description of what this deployer does.
-    /// </summary>
+    /// <summary>Short human-readable description.</summary>
     string Description { get; }
 
-    /// <summary>Populate <paramref name="world"/> with agents / incidents for this trial.</summary>
-    /// <param name="world">The world instance to populate.</param>
-    /// <param name="request">Parameters controlling how agents and incidents should be deployed.</param>
-    void Deploy(SimWorld world, DeployRequest request);
+    /// <summary>
+    /// When <c>true</c>, <see cref="Tick"/> is a no-op.
+    /// Immediate deployers set this after their one-shot placement.
+    /// </summary>
+    bool IsDormant { get; }
+
+    /// <summary>CLR type of the options object returned by <see cref="CreateOptions"/>.</summary>
+    Type OptionsType { get; }
+
+    /// <summary>Creates a fresh options instance with defaults.</summary>
+    object CreateOptions();
+
+    /// <summary>
+    /// Bind to a world using a typed options instance.
+    /// Immediate deployers perform placement here; periodic ones store config for <see cref="Tick"/>.
+    /// </summary>
+    /// <param name="world">World to populate / observe.</param>
+    /// <param name="options">Deployer-specific options (<see cref="OptionsType"/>).</param>
+    /// <param name="context">Agent resolution and RNG salt.</param>
+    void Attach(SimWorld world, object options, DeployContext context);
+
+    /// <summary>
+    /// Called by <see cref="SimWorld.Tick"/> before agents act.
+    /// </summary>
+    /// <param name="ctx">Current world context.</param>
+    void Tick(WorldContext ctx);
 }
 
 /// <summary>
-/// Parameters describing how to deploy agents and incidents into a world for a trial.
+/// Options for <see cref="PeriodicIncidentDeployer"/> (uniform incident waves).
 /// </summary>
-public sealed class DeployRequest
+public sealed class PeriodicIncidentOptions
 {
-    /// <summary>
-    /// Number of agents to create for the trial.
-    /// </summary>
-    public required int AgentCount { get; init; }
+    /// <summary>Ticks between waves (including a wave at tick 0).</summary>
+    [DeployerParam("Period (ticks)", Description = "Spawn on ticks 0, N, 2N, …")]
+    public int PeriodTicks { get; set; } = 25;
 
-    /// <summary>
-    /// Name of the agent type to create (used with <see cref="AgentFactory"/> or other registries).
-    /// </summary>
-    public required string AgentTypeName { get; init; }
+    /// <summary>Incidents created each wave.</summary>
+    [DeployerParam("Count")]
+    public int Count { get; set; } = 1;
 
-    /// <summary>
-    /// Factory delegate used to create an <see cref="Domain.Agent"/> given an optional label.
-    /// </summary>
-    public required Func<string, Domain.Agent> AgentFactory { get; init; }
-
-    /// <summary>
-    /// Number of incidents to create for the trial (default: 0).
-    /// </summary>
-    public int IncidentCount { get; init; } = 0;
-
-    /// <summary>
-    /// Default sensor range to assign to created agents (domain units, default: 100).
-    /// </summary>
-    public double SensorRange { get; init; } = 100;
-
-    /// <summary>
-    /// Number of adversary agents to mix into the deployment (default: 0).
-    /// When greater than zero, <see cref="AdversaryFactory"/> must be supplied.
-    /// </summary>
-    public int AdversaryCount { get; init; } = 0;
-
-    /// <summary>
-    /// Factory used to create adversary agents when <see cref="AdversaryCount"/> &gt; 0.
-    /// </summary>
-    public Func<string, Domain.Agent>? AdversaryFactory { get; init; }
-
-    /// <summary>
-    /// Gaussian deployment sigma in world units (used by Gaussian deployers). Default: 80.
-    /// </summary>
-    public double DeploySigma { get; init; } = 80;
-
-    /// <summary>
-    /// Optional drop-point for Gaussian agent deployment. When null, world center is used.
-    /// </summary>
-    public Domain.Vec2? DropPoint { get; init; }
-
-    /// <summary>
-    /// When true and adversaries are present, place each incident within an adversary's
-    /// sensor range so infiltrators can act on real events (informed-adversary stress test).
-    /// Ignored when <see cref="AdversaryCount"/> is 0.
-    /// </summary>
-    public bool PlaceIncidentsNearAdversaries { get; init; }
-
-    /// <summary>
-    /// Optional salt mixed into the deployer RNG seed. Default 0 (unchanged CLI/Trust behavior).
-    /// Useful for additive mid-run deployments so placements do not repeat the initial pattern.
-    /// </summary>
-    public int RandomSalt { get; init; }
+    /// <summary>Logical incident kind for styling / filtering (default <c>Incident</c>).</summary>
+    [DeployerParam("Incident type", IsIncidentType = true, Required = false)]
+    public string IncidentType { get; set; } = "Incident";
 }
