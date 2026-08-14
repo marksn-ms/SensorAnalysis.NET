@@ -1,0 +1,67 @@
+<Window x:Class="SensorAnalysis.Viewport3DPrototype.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SensorAnalysis — 3D World Prototype"
+        Width="1000" Height="760" MinWidth="680" MinHeight="520"
+        WindowStartupLocation="CenterScreen">
+  <DockPanel Margin="12">
+    <Border DockPanel.Dock="Top" Padding="0,0,0,10">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal">
+          <Button x:Name="DecreaseButton" Content="−" Click="Decrease_Click"
+                  FontSize="20" Width="36" Height="32" />
+          <Button x:Name="IncreaseButton" Content="+" Click="Increase_Click"
+                  FontSize="20" Width="36" Height="32" Margin="6,0,0,0" />
+          <Button x:Name="StartButton" Content="Start" Click="Start_Click"
+                  Width="54" Height="32" Margin="14,0,0,0" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Margin="14,0" VerticalAlignment="Center">
+          <TextBlock x:Name="WorldTitle" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock x:Name="WorldDetail" Opacity="0.7" FontSize="12" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Content="Zoom −" Click="ZoomOut_Click" Padding="8,3" />
+          <Button Content="Zoom +" Click="ZoomIn_Click" Padding="8,3" Margin="6,0,0,0" />
+          <TextBlock Opacity="0.7" Margin="14,0,0,0" VerticalAlignment="Center"
+                     Text="Drag to orbit · wheel to zoom" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="58" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="58" />
+      </Grid.ColumnDefinitions>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="58" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="58" />
+      </Grid.RowDefinitions>
+
+      <Button Grid.Row="0" Grid.Column="1" Content="▲" Click="Up_Click" FontSize="17"
+              Width="50" Height="34" HorizontalAlignment="Center" VerticalAlignment="Center" />
+      <Button Grid.Row="1" Grid.Column="0" Content="◀" Click="Left_Click" FontSize="17"
+              Width="42" Height="42" HorizontalAlignment="Center" VerticalAlignment="Center" />
+      <Button Grid.Row="1" Grid.Column="2" Content="▶" Click="Right_Click" FontSize="17"
+              Width="42" Height="42" HorizontalAlignment="Center" VerticalAlignment="Center" />
+      <Button Grid.Row="2" Grid.Column="1" Content="▼" Click="Down_Click" FontSize="17"
+              Width="50" Height="34" HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+      <Border Grid.Row="1" Grid.Column="1" Background="#1E1E1E" BorderBrush="#444" BorderThickness="1"
+              CornerRadius="3" ClipToBounds="True">
+        <Viewport3D x:Name="WorldViewport"
+                    MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
+                    MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
+                    MouseMove="Viewport_MouseMove"
+                    MouseWheel="Viewport_MouseWheel" />
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

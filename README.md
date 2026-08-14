@@ -31,6 +31,7 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 | `SensorAnalysis.Agents` | Strategies, `GaussianDeployer` / `RandomDeployer`, watchers |
 | `SensorAnalysis.App` | WPF UI (directives, live metrics, entity visuals) |
 | `SensorAnalysis.Cli` | Headless batch runner |
+| `SensorAnalysis.Viewport3DPrototype` | Isolated WPF `Viewport3D` experiment for closed 3D tile worlds |
 | `SensorAnalysis.Core.Tests` | Unit tests |
 
 ## Quick start
@@ -64,6 +65,22 @@ Typical interactive flow:
 6. Pause (**Stop**) to **Apply now** mid-run (e.g. inject more agents at the current tick)
 7. Use **+** under Live metrics to pin inherent fields or watcher columns (incl. Clearance / TrustTel); sparklines plot vs tick
 8. **Legend** lists colors/shapes for agent and incident types currently in the world
+
+### Run the 3D topology prototype
+
+```bash
+dotnet run --project src/SensorAnalysis.Viewport3DPrototype
+```
+
+This intentionally standalone prototype has no references to Core, Agents, or App. It creates
+an unbounded number of evenly distributed Fibonacci center points and calculates a default
+one-tile-scale sensor range from their density. The viewport renders the continuous sphere rather
+than individual tiles. Use **+** / **−** to change the number of centers, **Start** to run a
+continuous random walk across the surface, arrow buttons or mouse drag to orbit, and either mouse
+wheel or **Zoom** controls to change distance. The inhabitant is a surface-tangent disc with
+radius `r / 100`; because that footprint is sub-pixel on a unit sphere, the marker is drawn at a
+visibility floor and the header reports both values. Three colored axes protrude through the
+poles (red), the prime meridian (blue), and their mutual perpendicular (green) for scale.
 
 ### Publish CLI next to the Trust paper repo
 

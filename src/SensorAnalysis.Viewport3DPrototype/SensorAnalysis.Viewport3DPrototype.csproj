@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SensorAnalysis.Viewport3DPrototype</RootNamespace>
+    <AssemblyName>SensorAnalysis.Viewport3DPrototype</AssemblyName>
+    <Description>Standalone WPF 3D topology prototype for SensorAnalysis.</Description>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
