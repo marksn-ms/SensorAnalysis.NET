@@ -25,6 +25,10 @@ public static class BuiltinCatalog
         registry.Register(new HerdingDeceptiveAgentFactory());
         registry.Register(new HerdingDeceptiveOracleAgentFactory());
         registry.Register(new MitigatedOrbitAgentFactory());
+        // First-principles crowding-only family (no radio): Stage-1 thesis isolation.
+        registry.Register(new PersonalSpaceCoopAgentFactory());
+        registry.Register(new CrowdOnlyDeceptiveAgentFactory());
+        registry.Register(new CrowdAwareMitigatedAgentFactory());
         return registry;
     }
 

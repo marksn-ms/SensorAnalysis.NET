@@ -57,10 +57,13 @@ public sealed class EntityVisualCatalog
         c.RegisterAgent(new("CooperativeSearch", EntityMarkerShape.Circle, 80, 140, 220));
         c.RegisterAgent(new("OrbitingCoop", EntityMarkerShape.Circle, 70, 165, 235));
         c.RegisterAgent(new("MitigatedOrbit", EntityMarkerShape.Circle, 60, 200, 200));
+        c.RegisterAgent(new("PersonalSpaceCoop", EntityMarkerShape.Circle, 90, 180, 120));
+        c.RegisterAgent(new("CrowdAwareMitigated", EntityMarkerShape.Circle, 50, 190, 150));
         c.RegisterAgent(new("TrustAwareSearch", EntityMarkerShape.Circle, 150, 110, 210));
         c.RegisterAgent(new("DeceptiveStigmergy", EntityMarkerShape.Diamond, 220, 140, 70));
         c.RegisterAgent(new("HerdingDeceptive", EntityMarkerShape.Diamond, 210, 70, 90));
         c.RegisterAgent(new("HerdingDeceptiveOracle", EntityMarkerShape.Diamond, 180, 55, 120));
+        c.RegisterAgent(new("CrowdOnlyDeceptive", EntityMarkerShape.Diamond, 230, 100, 60));
 
         // Incidents — triangles by kind (extensible when deployers set IncidentType).
         c.RegisterIncident(new("Incident", EntityMarkerShape.Triangle, 235, 110, 85, 6.5));
