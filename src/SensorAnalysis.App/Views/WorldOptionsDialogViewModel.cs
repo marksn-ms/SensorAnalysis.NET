@@ -25,6 +25,12 @@ public partial class WorldOptionsDialogViewModel : ObservableObject
     /// <summary>RNG seed for the new world.</summary>
     [ObservableProperty] private int _seed = 42;
 
+    /// <summary>
+    /// When true, agents see a binary in-range disc with exact positions (legacy).
+    /// Default false: probabilistic noisy cues.
+    /// </summary>
+    [ObservableProperty] private bool _exactSensing;
+
     /// <summary>Prefills fields from prior options and seed.</summary>
     public void Prefill(WorldOptions options, int seed)
     {
@@ -34,6 +40,7 @@ public partial class WorldOptionsDialogViewModel : ObservableObject
         TileWidthPx = options.TileSizePx.Width;
         TileHeightPx = options.TileSizePx.Height;
         Seed = seed;
+        ExactSensing = options.ExactSensing;
     }
 
     /// <summary>Builds a <see cref="WorldOptions"/> from the form values.</summary>
@@ -41,7 +48,8 @@ public partial class WorldOptionsDialogViewModel : ObservableObject
     {
         Title = string.IsNullOrWhiteSpace(Title) ? "New World" : Title.Trim(),
         TileCount = new GridSize(TileColumns, TileRows),
-        TileSizePx = new GridSize(TileWidthPx, TileHeightPx)
+        TileSizePx = new GridSize(TileWidthPx, TileHeightPx),
+        ExactSensing = ExactSensing
     };
 
     /// <summary>Validates positive grid dimensions.</summary>

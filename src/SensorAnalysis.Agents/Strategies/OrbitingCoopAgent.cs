@@ -1,15 +1,15 @@
 using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.Messaging;
+using SensorAnalysis.Core.Sensing;
 
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
 /// Honest squad searcher: personal-space exploration, orbit commitments at r/2,
 /// bird-in-hand join, and smart-but-naive rebalancing while committed.
-/// Remains responsive to stimulus after lock-on (over-cover break-off, switch to
-/// under-covered sighted or reported work) so cooperation stays an attack surface.
-/// Sparse radio on contact / orbit / break plus occasional status while monitoring.
+/// Tracks a list of <see cref="EventHypothesis"/> entries (sensor cues and radio rumors).
+/// Missing a ping for a tick does not clear a belief; unconfirmed rumors decay back to search.
 /// </summary>
 public class OrbitingCoopAgent : Agent
 {
@@ -18,16 +18,26 @@ public class OrbitingCoopAgent : Agent
     protected int TicksSinceReport;
     private AgentAction _exploreHeading = AgentAction.Stay;
     private int _explorePersist;
-    /// <summary>Incident id currently being orbited (null if none).</summary>
+    /// <summary>Local hypothesis id currently being orbited (null if none). Not a world incident id.</summary>
     protected int? CommittedIncidentId;
-    /// <summary>Incident position currently being orbited (last known).</summary>
+    /// <summary>Incident position currently being orbited (last estimate).</summary>
     protected Vec2 CommittedPosition;
     /// <summary>Whether an orbit-confirmed radio call has been sent for the current commitment.</summary>
     protected bool OrbitAnnounced;
-    /// <summary>Incident reports overheard (agent id, incident id).</summary>
+    /// <summary>Incident reports overheard (agent id, claimed id) — legacy pairing for subclasses.</summary>
     protected readonly HashSet<(int AgentId, int IncidentId)> HeardReports = new();
+    /// <summary>Claimed locations overheard this commitment (spatial; ids are untrusted).</summary>
+    protected readonly List<(int AgentId, Vec2 Position)> HeardClaims = new();
     /// <summary>Ticks remaining before another switch/break is allowed.</summary>
     protected int SwitchCooldownRemaining;
+    /// <summary>Suspected events (cues + rumors) this agent is tracking.</summary>
+    protected readonly EventHypothesisMemory Hypotheses = new();
+
+    /// <summary>Read-only view of the hypothesis list (tests / UI).</summary>
+    public IReadOnlyList<EventHypothesis> TrackedEvents => Hypotheses.Items;
+
+    /// <summary>Local track currently being pursued, if any.</summary>
+    public int? CommittedTrackId => CommittedIncidentId;
 
     /// <summary>Creates an orbiting cooperative agent.</summary>
     public OrbitingCoopAgent(int? seed = null)
@@ -67,42 +77,96 @@ public class OrbitingCoopAgent : Agent
     public override void Tick(WorldContext ctx)
     {
         var observation = ctx.World.Observe(this);
-        var personalSpace = SensorRange * 0.5;
+        Hypotheses.AssociationRadius = Math.Max(12, SensorRange * 0.35);
+
+        OnBeforeSearch(ctx, observation);
 
         if (SwitchCooldownRemaining > 0)
             SwitchCooldownRemaining--;
 
-        IngestReports(observation);
+        Hypotheses.TickAge();
+        IngestCues(observation);
+        IngestRumors(ctx, observation);
+        Hypotheses.DecayAndPrune();
+
         MaybeRebalanceOvercrowd(ctx, observation);
-        MaybeSwitchFromSight(ctx, observation);
-        MaybeSwitchFromReports(ctx, observation);
-        MaybeCommitFromSight(ctx, observation);
-        MaybeCommitFromReports(ctx, observation);
+        MaybeRetarget(ctx, observation);
+        MaybeCommitBest(ctx, observation);
+        MaybeDropStaleCommitment(ctx);
+
         MaybeAnnounceOrbit(ctx, observation);
         MaybeBroadcastStatus(ctx, observation);
 
+        OnAfterSearch(ctx, observation);
+
+        var personalSpace = SensorRange * 0.5;
         LastAction = ChooseAction(observation, personalSpace);
         Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
+    }
 
-        if (CommittedIncidentId is int id &&
-            observation.NearbyIncidents.All(i => i.Id != id) &&
-            !ctx.World.ActiveIncidents.Any(i => i.Id == id))
+    /// <summary>Hook before hypothesis update (mitigated: gossip, probes, herding).</summary>
+    protected virtual void OnBeforeSearch(WorldContext ctx, AgentObservation observation)
+    {
+    }
+
+    /// <summary>Hook after radio/status, before motion (mitigated: silence).</summary>
+    protected virtual void OnAfterSearch(WorldContext ctx, AgentObservation observation)
+    {
+    }
+
+    /// <summary>Fold this tick's sensor cues into the hypothesis list.</summary>
+    protected void IngestCues(AgentObservation observation)
+    {
+        var w = observation.WorldWidth;
+        var h = observation.WorldHeight;
+        foreach (var cue in observation.NearbyIncidents)
         {
-            BreakOff(ctx, id);
+            var strength = cue.Strength > 0 ? cue.Strength : 0.5;
+            Hypotheses.IngestCue(cue.Position, strength, w, h);
         }
     }
 
-    /// <summary>Record overheard claims (contact / orbit / status).</summary>
-    protected virtual void IngestReports(AgentObservation observation)
+    /// <summary>Treat radio claims as rumors (same memory as sensing).</summary>
+    protected virtual void IngestRumors(WorldContext ctx, AgentObservation observation)
     {
         foreach (var msg in observation.NearbyMessages)
         {
-            if (!RadioNet.TryParseClaim(msg.Payload, out _, out var iid, out _) ||
-                msg.FromAgentId is not int sid)
+            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
                 continue;
-            HeardReports.Add((sid, iid));
+            if (kind == RadioClaimKind.Break)
+                continue;
+            if (!ShouldFollowReport(msg, claimed))
+                continue;
+
+            if (msg.FromAgentId is int sid)
+            {
+                HeardReports.Add((sid, iid));
+                HeardClaims.Add((sid, claimed));
+            }
+
+            var othersCloser = CountOthersCloser(observation, claimed);
+            if (othersCloser >= MaxOthersCloserToJoin)
+            {
+                OnSaturatedRumor(msg, claimed);
+                continue;
+            }
+
+            Hypotheses.IngestRumor(
+                claimed,
+                msg.FromAgentId,
+                observation.WorldWidth,
+                observation.WorldHeight,
+                RumorTrustWeight(msg));
         }
+    }
+
+    /// <summary>Trust scaling for a rumor (honest = 1).</summary>
+    protected virtual double RumorTrustWeight(MessageInfo msg) => 1;
+
+    /// <summary>Saturated pile-on claim (mitigated marks an offense).</summary>
+    protected virtual void OnSaturatedRumor(MessageInfo msg, Vec2 claimed)
+    {
     }
 
     /// <summary>
@@ -113,6 +177,7 @@ public class OrbitingCoopAgent : Agent
     {
         if (CommittedIncidentId is not int id) return;
         if (SwitchCooldownRemaining > 0) return;
+        if (Hypotheses.Get(id) is null) return;
 
         var orbitRadius = SensorRange * 0.5;
         var stationRadius = orbitRadius * 1.2;
@@ -130,7 +195,6 @@ public class OrbitingCoopAgent : Agent
                 .Select(a => observation.DistanceTo(a.Position))
                 .DefaultIfEmpty(double.MaxValue)
                 .Min();
-            // Inside ~0.4 of orbit radius ⇒ stacked, not spaced at ~120°.
             tightlyClumped = nearestPeer < orbitRadius * 0.4 &&
                              ShouldYieldStation(observation, center, stationRadius);
         }
@@ -142,102 +206,74 @@ public class OrbitingCoopAgent : Agent
         SwitchCooldownRemaining = SwitchCooldownTicks;
     }
 
-    /// <summary>
-    /// While committed, switch to a visible under-covered incident when engagement
-    /// advantage clearly favors leaving the current event.
-    /// </summary>
-    protected virtual void MaybeSwitchFromSight(WorldContext ctx, AgentObservation observation)
+    /// <summary>While committed, switch to a less-engaged hypothesis when advantage is clear.</summary>
+    protected virtual void MaybeRetarget(WorldContext ctx, AgentObservation observation)
     {
         if (CommittedIncidentId is not int currentId) return;
         if (SwitchCooldownRemaining > 0) return;
+        var current = Hypotheses.Get(currentId);
+        if (current is null) return;
 
-        var currentCenter = ResolveCommittedCenter(observation);
-        var currentEngagement = CountOthersCloser(observation, currentCenter);
+        var currentEngagement = CountOthersCloser(observation, current.Estimate);
 
-        IncidentInfo? best = null;
+        EventHypothesis? best = null;
         var bestEngagement = int.MaxValue;
-        foreach (var inc in observation.NearbyIncidents)
+        foreach (var h in Hypotheses.Items)
         {
-            if (inc.Id == currentId) continue;
-            var eng = CountOthersCloser(observation, inc.Position);
+            if (h.LocalId == currentId) continue;
+            if (h.Confidence < Hypotheses.SuspectThreshold) continue;
+            var eng = CountOthersCloser(observation, h.Estimate);
+            if (eng >= MaxOthersCloserToJoin) continue;
             if (eng >= bestEngagement) continue;
             bestEngagement = eng;
-            best = inc;
+            best = h;
         }
 
         if (best is null) return;
         if (currentEngagement - bestEngagement < SwitchAdvantage) return;
 
-        SwitchTo(ctx, best.Value.Id, best.Value.Position, announceContact: true, reportSenderId: null);
+        SwitchTo(ctx, best, announceContact: true, reportSenderId: best.LastInformantId);
     }
 
-    /// <summary>
-    /// Naive radio response: join when free, or switch while committed if the claim
-    /// looks less engaged than the current event (opens the decoy attack surface).
-    /// </summary>
-    protected virtual void MaybeSwitchFromReports(WorldContext ctx, AgentObservation observation)
+    /// <summary>Commit to the strongest plausible hypothesis when free.</summary>
+    protected virtual void MaybeCommitBest(WorldContext ctx, AgentObservation observation)
     {
-        if (CommittedIncidentId is null) return;
-        if (SwitchCooldownRemaining > 0) return;
+        if (CommittedIncidentId is int id && Hypotheses.Get(id) is not null)
+            return;
 
-        var currentCenter = ResolveCommittedCenter(observation);
-        var currentEngagement = CountOthersCloser(observation, currentCenter);
-
-        foreach (var msg in observation.NearbyMessages)
+        foreach (var h in Hypotheses.Items.OrderByDescending(x => x.Confidence))
         {
-            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
+            if (h.Confidence < Hypotheses.SuspectThreshold)
                 continue;
-            if (kind == RadioClaimKind.Break) continue;
-            if (CommittedIncidentId == iid) continue;
-            if (!ShouldFollowReport(msg, claimed))
+            if (CountOthersCloser(observation, h.Estimate) >= MaxOthersCloserToJoin)
                 continue;
 
-            var claimEngagement = CountOthersCloser(observation, claimed);
-            if (currentEngagement - claimEngagement < SwitchAdvantage)
-                continue;
-            // Also require bird-in-hand: do not pile onto an already full claim.
-            if (claimEngagement >= MaxOthersCloserToJoin)
-                continue;
+            Commit(ctx, h, announceContact: true);
+            if (h.LastSource == HypothesisSource.Rumor && h.LastInformantId is int sid)
+            {
+                var synthetic = new MessageInfo(
+                    Id: -1,
+                    Position: h.Estimate,
+                    FromType: string.Empty,
+                    FromAgentId: sid,
+                    ToAgentId: null,
+                    Payload: RadioNet.FormatContact(h.LocalId, h.Estimate),
+                    TtlRemaining: MessageEchoTtl);
+                OnFollowedReport(synthetic, h.Estimate, h.LocalId);
+            }
 
-            SwitchTo(ctx, iid, claimed, announceContact: true, reportSenderId: msg.FromAgentId);
             return;
         }
     }
 
-    /// <summary>Finder: commit to a visible incident when not already committed.</summary>
-    protected virtual void MaybeCommitFromSight(WorldContext ctx, AgentObservation observation)
+    /// <summary>Drop commitment when the track was pruned (rumor never confirmed).</summary>
+    protected void MaybeDropStaleCommitment(WorldContext ctx)
     {
-        if (CommittedIncidentId is not null) return;
-        if (observation.NearbyIncidents.Count == 0) return;
-
-        var nearest = observation.NearbyIncidents
-            .OrderBy(i => observation.DistanceTo(i.Position))
-            .First();
-        Commit(ctx, nearest.Id, nearest.Position, announceContact: true);
-    }
-
-    /// <summary>Bird-in-hand: join a reported event if few others are already closer.</summary>
-    protected virtual void MaybeCommitFromReports(WorldContext ctx, AgentObservation observation)
-    {
-        if (CommittedIncidentId is not null) return;
-
-        foreach (var msg in observation.NearbyMessages)
-        {
-            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
-                continue;
-            // Joining on break makes no sense; contact/orbit/status are actionable.
-            if (kind == RadioClaimKind.Break) continue;
-            if (!ShouldFollowReport(msg, claimed))
-                continue;
-
-            var othersCloser = CountOthersCloser(observation, claimed);
-            if (othersCloser >= MaxOthersCloserToJoin)
-                continue;
-
-            Commit(ctx, iid, claimed, announceContact: true);
-            OnFollowedReport(msg, claimed, iid);
+        if (CommittedIncidentId is not int id)
             return;
-        }
+        if (Hypotheses.Get(id) is not null)
+            return;
+        BreakOff(ctx, id);
     }
 
     /// <summary>Honest agents trust all incident reports.</summary>
@@ -254,52 +290,63 @@ public class OrbitingCoopAgent : Agent
     protected virtual void MaybeAnnounceOrbit(WorldContext ctx, AgentObservation observation)
     {
         if (OrbitAnnounced || CommittedIncidentId is not int id) return;
+        var track = Hypotheses.Get(id);
+        if (track is null) return;
 
         var orbitRadius = SensorRange * 0.5;
-        var sensed = observation.NearbyIncidents.FirstOrDefault(i => i.Id == id);
-        var target = sensed.Id == id ? sensed.Position : CommittedPosition;
+        var target = ResolveCommittedCenter(observation);
         if (observation.DistanceTo(target) > orbitRadius * 1.15)
             return;
 
-        if (sensed.Id == id)
-            CommittedPosition = sensed.Position;
+        var confident = track.Confidence >= Hypotheses.OrbitThreshold;
+        var cued = AnyCueNear(observation, target, orbitRadius);
+        if (!confident && !cued)
+            return;
 
+        CommittedPosition = target;
         ctx.World.Transmit(this, RadioNet.FormatOrbit(id, CommittedPosition), MessageEchoTtl);
         OrbitAnnounced = true;
         HeardReports.Add((Id, id));
         TicksSinceReport = 0;
     }
 
-    /// <summary>Sparse status while monitoring and the event is still visible.</summary>
+    /// <summary>Sparse status while monitoring and a cue still supports the estimate.</summary>
     protected virtual void MaybeBroadcastStatus(WorldContext ctx, AgentObservation observation)
     {
         TicksSinceReport++;
         if (CommittedIncidentId is not int id || TicksSinceReport < ReportCooldown)
             return;
-
-        var sensed = observation.NearbyIncidents.Where(i => i.Id == id).ToList();
-        if (sensed.Count == 0)
+        var track = Hypotheses.Get(id);
+        if (track is null)
             return;
 
-        var pos = sensed[0].Position;
-        CommittedPosition = pos;
-        ctx.World.Transmit(this, IncidentMarker.Format(id, pos), MessageEchoTtl);
+        var target = ResolveCommittedCenter(observation);
+        if (!AnyCueNear(observation, target, SensorRange * 0.6) &&
+            track.LastSource != HypothesisSource.Sensor)
+            return;
+
+        CommittedPosition = target;
+        ctx.World.Transmit(this, IncidentMarker.Format(id, target), MessageEchoTtl);
         HeardReports.Add((Id, id));
         TicksSinceReport = 0;
     }
 
-    /// <summary>Steer: orbit if committed, else personal-space explore.</summary>
+    /// <summary>Steer: approach/orbit a suspected event, else personal-space explore.</summary>
     protected virtual AgentAction ChooseAction(AgentObservation observation, double personalSpace)
     {
-        if (CommittedIncidentId is not null)
+        if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
             var orbitRadius = SensorRange * 0.5;
-            var center = observation.NearbyIncidents
-                .FirstOrDefault(i => i.Id == CommittedIncidentId.Value);
-            var target = center.Id == CommittedIncidentId.Value ? center.Position : CommittedPosition;
-            return Steering.OrbitClockwise(
-                observation.SelfPosition, target, orbitRadius,
-                observation.WorldWidth, observation.WorldHeight);
+            var target = ResolveCommittedCenter(observation);
+            var dist = observation.DistanceTo(target);
+            if (track.Confidence >= Hypotheses.OrbitThreshold || dist <= orbitRadius * 1.2)
+            {
+                return Steering.OrbitClockwise(
+                    observation.SelfPosition, target, orbitRadius,
+                    observation.WorldWidth, observation.WorldHeight);
+            }
+
+            return Steering.DirectionToward(observation.DisplacementTo(target));
         }
 
         return Steering.ExploreWithPersonalSpace(
@@ -315,66 +362,72 @@ public class OrbitingCoopAgent : Agent
             out _explorePersist);
     }
 
-    /// <summary>Commit to an incident and optionally radio first contact.</summary>
-    protected void Commit(WorldContext ctx, int incidentId, Vec2 position, bool announceContact)
+    /// <summary>Commit to a hypothesis and optionally radio first contact.</summary>
+    protected void Commit(WorldContext ctx, EventHypothesis track, bool announceContact)
     {
-        CommittedIncidentId = incidentId;
-        CommittedPosition = position;
+        CommittedIncidentId = track.LocalId;
+        CommittedPosition = track.Estimate;
         OrbitAnnounced = false;
-        TicksSinceReport = ReportCooldown; // allow prompt status after orbit if needed
+        TicksSinceReport = ReportCooldown;
         if (announceContact)
         {
-            ctx.World.Transmit(this, RadioNet.FormatContact(incidentId, position), MessageEchoTtl);
-            HeardReports.Add((Id, incidentId));
+            ctx.World.Transmit(this, RadioNet.FormatContact(track.LocalId, track.Estimate), MessageEchoTtl);
+            HeardReports.Add((Id, track.LocalId));
             TicksSinceReport = 0;
         }
     }
 
-    /// <summary>Break current commitment (if any) and commit to a new claim.</summary>
+    /// <summary>Break current commitment (if any) and commit to a new hypothesis.</summary>
     protected void SwitchTo(
         WorldContext ctx,
-        int incidentId,
-        Vec2 position,
+        EventHypothesis track,
         bool announceContact,
         int? reportSenderId)
     {
-        if (CommittedIncidentId is int oldId && oldId != incidentId)
+        if (CommittedIncidentId is int oldId && oldId != track.LocalId)
             BreakOff(ctx, oldId);
 
-        Commit(ctx, incidentId, position, announceContact);
+        Commit(ctx, track, announceContact);
         SwitchCooldownRemaining = SwitchCooldownTicks;
 
         if (reportSenderId is int sid)
         {
-            // Synthesize a message-shaped follow so mitigated can start a probe.
             var synthetic = new MessageInfo(
                 Id: -1,
-                Position: position,
+                Position: track.Estimate,
                 FromType: string.Empty,
                 FromAgentId: sid,
                 ToAgentId: null,
-                Payload: RadioNet.FormatContact(incidentId, position),
+                Payload: RadioNet.FormatContact(track.LocalId, track.Estimate),
                 TtlRemaining: MessageEchoTtl);
-            OnFollowedReport(synthetic, position, incidentId);
+            OnFollowedReport(synthetic, track.Estimate, track.LocalId);
         }
     }
 
     /// <summary>Clear commitment and announce break.</summary>
-    protected void BreakOff(WorldContext ctx, int incidentId)
+    protected virtual void BreakOff(WorldContext ctx, int incidentId)
     {
         CommittedIncidentId = null;
         OrbitAnnounced = false;
+        HeardClaims.Clear();
         ctx.World.Transmit(this, RadioNet.FormatBreak(incidentId), MessageEchoTtl);
     }
 
-    /// <summary>Last known / sensed center of the current commitment.</summary>
+    /// <summary>Last estimate of the current commitment, nudged by a nearby cue if any.</summary>
     protected Vec2 ResolveCommittedCenter(AgentObservation observation)
     {
-        if (CommittedIncidentId is int id)
+        if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
-            var sensed = observation.NearbyIncidents.FirstOrDefault(i => i.Id == id);
-            if (sensed.Id == id)
-                return sensed.Position;
+            var near = NearestCue(observation, track.Estimate, SensorRange * 0.5);
+            if (near is { } cue)
+            {
+                track.Estimate = cue;
+                CommittedPosition = cue;
+                return cue;
+            }
+
+            CommittedPosition = track.Estimate;
+            return track.Estimate;
         }
 
         return CommittedPosition;
@@ -406,8 +459,30 @@ public class OrbitingCoopAgent : Agent
             var d = Vec2.ToroidalDistance(a.Position, center, observation.WorldWidth, observation.WorldHeight);
             return d <= stationRadius && d <= selfDist + 1e-6;
         });
-        // Peers closer-or-equal + self; if more than MaxOrbiters would remain with us, yield.
         return closerOrEqualPeers + 1 > MaxOrbiters;
+    }
+
+    /// <summary>True when a cue this tick lands near <paramref name="center"/>.</summary>
+    protected static bool AnyCueNear(AgentObservation observation, Vec2 center, double radius) =>
+        observation.NearbyIncidents.Any(c =>
+            Vec2.ToroidalDistance(c.Position, center, observation.WorldWidth, observation.WorldHeight) <= radius);
+
+    private static Vec2? NearestCue(AgentObservation observation, Vec2 center, double radius)
+    {
+        Vec2? best = null;
+        var bestD = double.PositiveInfinity;
+        foreach (var c in observation.NearbyIncidents)
+        {
+            var d = Vec2.ToroidalDistance(
+                c.Position, center, observation.WorldWidth, observation.WorldHeight);
+            if (d <= radius && d < bestD)
+            {
+                bestD = d;
+                best = c.Position;
+            }
+        }
+
+        return best;
     }
 }
 

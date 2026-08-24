@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SensorAnalysis.Sphere.Core</AssemblyName>
+    <RootNamespace>SensorAnalysis.Sphere.Core</RootNamespace>
+    <Description>Geodesic spherical simulation primitives for SensorAnalysis.</Description>
+  </PropertyGroup>
+</Project>

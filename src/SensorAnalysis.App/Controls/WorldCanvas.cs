@@ -206,14 +206,16 @@ public class WorldCanvas : FrameworkElement
             DrawStyledMarker(dc, inc.Position, style, selected, z);
         }
 
-        // Messages — small lime dots (environmental echoes)
+        // Messages — lime echoes that fade with remaining TTL (1 at birth, 0 at expiry)
         foreach (var msg in World.Messages)
         {
             var selected = msg.IsSelected || ReferenceEquals(msg, SelectedObject);
+            dc.PushOpacity(msg.RemainingLife);
             if (selected)
                 DrawEllipseMarker(dc, msg.Position, 5, SelectedFillBrush, z, SelectedPen);
             else
                 DrawEllipseMarker(dc, msg.Position, 3, MessageBrush, z);
+            dc.Pop();
         }
 
         // Agents — color/shape by AgentType

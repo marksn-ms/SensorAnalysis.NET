@@ -20,6 +20,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
 {
     private readonly Dictionary<int, BetaTrust> _trust = new();
     private readonly Dictionary<int, int> _offenseCount = new();
+    private readonly Dictionary<int, DisreputeBucket> _disreputeToward = new();
     private readonly Dictionary<int, double> _prevPeerDist = new();
     private readonly Dictionary<int, int> _intrusionTicks = new();
     private readonly HashSet<int> _silenceAccusedThisCommitment = new();
@@ -61,40 +62,53 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     /// <summary>Mean trust toward a peer (prior if unknown).</summary>
     public double MeanTrustToward(int agentId) => MeanTrust(agentId);
 
-    /// <inheritdoc />
-    public override void Tick(WorldContext ctx)
+    /// <summary>
+    /// Cumulative penalty weight applied toward each peer (Beta increases), keyed by agent id.
+    /// Used by <see cref="Watchers.TrustTelemetryWatcher"/> to separate intramural vs infiltrator damage.
+    /// </summary>
+    public IReadOnlyDictionary<int, DisreputeBucket> DisreputeToward => _disreputeToward;
+
+    /// <summary>Total penalty weight this agent has applied (all peers, all channels).</summary>
+    public double TotalDisreputeWeight
     {
-        var observation = ctx.World.Observe(this);
+        get
+        {
+            double sum = 0;
+            foreach (var b in _disreputeToward.Values)
+                sum += b.TotalWeight;
+            return sum;
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnBeforeSearch(WorldContext ctx, AgentObservation observation)
+    {
         ProcessGossip(ctx, observation);
         ResolvePending(observation);
         ObserveHerdingIntrusions(observation);
+    }
 
-        if (SwitchCooldownRemaining > 0)
-            SwitchCooldownRemaining--;
-
-        var personalSpace = SensorRange * 0.5;
-        IngestReports(observation);
-        MaybeRebalanceOvercrowd(ctx, observation);
-        MaybeSwitchFromSight(ctx, observation);
-        MaybeSwitchFromReports(ctx, observation);
-        MaybeCommitFromSight(ctx, observation);
-        MaybeCommitFromReports(ctx, observation);
-        MaybeAnnounceOrbit(ctx, observation);
-        MaybeBroadcastStatus(ctx, observation);
+    /// <inheritdoc />
+    protected override void OnAfterSearch(WorldContext ctx, AgentObservation observation)
+    {
+        ArmPendingProbe(observation.Tick);
         DetectSilence(ctx, observation);
+    }
 
-        LastAction = ChooseAction(observation, personalSpace);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
-        TotalReward += observation.InstantReward;
+    /// <inheritdoc />
+    protected override void BreakOff(WorldContext ctx, int incidentId)
+    {
+        base.BreakOff(ctx, incidentId);
+        _silenceAccusedThisCommitment.Clear();
+        _coPresentTicks.Clear();
+    }
 
-        if (CommittedIncidentId is int id &&
-            !ctx.World.ActiveIncidents.Any(i => i.Id == id) &&
-            observation.NearbyIncidents.All(i => i.Id != id))
-        {
-            BreakOff(ctx, id);
-            _silenceAccusedThisCommitment.Clear();
-            _coPresentTicks.Clear();
-        }
+    /// <inheritdoc />
+    protected override double RumorTrustWeight(MessageInfo msg)
+    {
+        if (msg.FromAgentId is not int sid)
+            return 0;
+        return MeanTrust(sid);
     }
 
     /// <inheritdoc />
@@ -114,67 +128,14 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     }
 
     /// <inheritdoc />
-    protected override void MaybeCommitFromReports(WorldContext ctx, AgentObservation observation)
+    protected override void OnSaturatedRumor(MessageInfo msg, Vec2 claimed)
     {
-        if (CommittedIncidentId is not null) return;
-
-        foreach (var msg in observation.NearbyMessages)
-        {
-            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
-                continue;
-            if (kind == RadioClaimKind.Break) continue;
-            if (!ShouldFollowReport(msg, claimed))
-                continue;
-
-            var othersCloser = CountOthersCloser(observation, claimed);
-            if (othersCloser >= MaxOthersCloserToJoin)
-            {
-                // Saturated claim from a remote reporter — ignore and mark offense.
-                if (msg.FromAgentId is int sid && !IsSelfOnStationStatus(msg, sid, iid))
-                    RegisterOffense(sid);
-                continue;
-            }
-
-            Commit(ctx, iid, claimed, announceContact: true);
-            OnFollowedReport(msg, claimed, iid);
-            ArmPendingProbe(observation.Tick);
+        if (msg.FromAgentId is not int sid)
             return;
-        }
-    }
-
-    /// <inheritdoc />
-    protected override void MaybeSwitchFromReports(WorldContext ctx, AgentObservation observation)
-    {
-        if (CommittedIncidentId is null) return;
-        if (SwitchCooldownRemaining > 0) return;
-
-        var currentCenter = ResolveCommittedCenter(observation);
-        var currentEngagement = CountOthersCloser(observation, currentCenter);
-
-        foreach (var msg in observation.NearbyMessages)
-        {
-            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
-                continue;
-            if (kind == RadioClaimKind.Break) continue;
-            if (CommittedIncidentId == iid) continue;
-            if (!ShouldFollowReport(msg, claimed))
-                continue;
-
-            var claimEngagement = CountOthersCloser(observation, claimed);
-            if (claimEngagement >= MaxOthersCloserToJoin)
-            {
-                if (msg.FromAgentId is int sid && !IsSelfOnStationStatus(msg, sid, iid))
-                    RegisterOffense(sid);
-                continue;
-            }
-
-            if (currentEngagement - claimEngagement < SwitchAdvantage)
-                continue;
-
-            SwitchTo(ctx, iid, claimed, announceContact: true, reportSenderId: msg.FromAgentId);
-            ArmPendingProbe(observation.Tick);
+        if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out _))
             return;
-        }
+        if (!IsSelfOnStationStatus(msg, sid, iid) && kind != RadioClaimKind.Orbit)
+            RegisterOffense(sid, ReputationOffenseKind.Saturated);
     }
 
     /// <summary>
@@ -184,15 +145,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     protected override AgentAction ChooseAction(AgentObservation observation, double personalSpace)
     {
         if (CommittedIncidentId is not null)
-        {
-            var orbitRadius = SensorRange * 0.5;
-            var center = observation.NearbyIncidents
-                .FirstOrDefault(i => i.Id == CommittedIncidentId.Value);
-            var target = center.Id == CommittedIncidentId.Value ? center.Position : CommittedPosition;
-            return Steering.OrbitClockwise(
-                observation.SelfPosition, target, orbitRadius,
-                observation.WorldWidth, observation.WorldHeight);
-        }
+            return base.ChooseAction(observation, personalSpace);
 
         var trustedNeighbors = observation.NearbyAgents
             .Where(a => MeanTrust(a.Id) >= TrustThreshold)
@@ -242,7 +195,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
 
             if (_intrusionTicks.GetValueOrDefault(peer.Id) >= HerdingGraceTicks)
             {
-                RegisterOffense(peer.Id);
+                RegisterOffense(peer.Id, ReputationOffenseKind.Herding);
                 _intrusionTicks[peer.Id] = 0; // require sustained re-offense to escalate again
             }
         }
@@ -270,10 +223,10 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         if (probe.DeadlineTick == 0)
             return;
 
-        var confirmed = observation.NearbyIncidents.Any(i =>
+        var cueNearClaim = observation.NearbyIncidents.Any(i =>
             Vec2.ToroidalDistance(i.Position, probe.Claimed, observation.WorldWidth, observation.WorldHeight) <= VerifyRadius);
 
-        if (confirmed)
+        if (cueNearClaim)
         {
             RegisterSuccess(probe.SenderId);
             _pending = null;
@@ -281,16 +234,21 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         }
 
         var nearClaim = observation.DistanceTo(probe.Claimed) <= VerifyRadius;
-        if (nearClaim && observation.NearbyIncidents.Count == 0)
+        var ticksNear = probe.TicksNear + (nearClaim ? 1 : 0);
+        _pending = probe with { TicksNear = ticksNear };
+
+        // A single empty ping is not evidence of absence. Fail only after lingering
+        // near the claim for the verify window with no cue at all.
+        if (nearClaim && ticksNear >= VerifyWindowTicks)
         {
-            RegisterOffense(probe.SenderId);
+            RegisterOffense(probe.SenderId, ReputationOffenseKind.Verify);
             _pending = null;
             return;
         }
 
         if (observation.Tick >= probe.DeadlineTick)
         {
-            RegisterOffense(probe.SenderId);
+            RegisterOffense(probe.SenderId, ReputationOffenseKind.Verify);
             _pending = null;
         }
     }
@@ -299,22 +257,30 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     {
         // Only after we have ourselves announced this commitment (reduces false peer blame).
         if (!OrbitAnnounced || CommittedIncidentId is not int iid) return;
-        if (observation.NearbyIncidents.All(i => i.Id != iid)) return;
+        var center = ResolveCommittedCenter(observation);
+        var station = SensorRange * 0.6;
+        if (observation.DistanceTo(center) > station &&
+            !AnyCueNear(observation, center, station))
+            return;
 
         var present = new HashSet<int>();
         foreach (var peer in observation.NearbyAgents)
         {
             var peerInRangeOfEvent = Vec2.ToroidalDistance(
-                peer.Position, CommittedPosition, observation.WorldWidth, observation.WorldHeight) <= SensorRange * 0.6;
+                peer.Position, center, observation.WorldWidth, observation.WorldHeight) <= SensorRange * 0.6;
             if (!peerInRangeOfEvent) continue;
             present.Add(peer.Id);
             _coPresentTicks[peer.Id] = _coPresentTicks.GetValueOrDefault(peer.Id) + 1;
 
-            if (HeardReports.Contains((peer.Id, iid))) continue;
+            var reportedNear = HeardClaims.Any(c =>
+                c.AgentId == peer.Id &&
+                Vec2.ToroidalDistance(c.Position, center, observation.WorldWidth, observation.WorldHeight) <= station)
+                || HeardReports.Contains((peer.Id, iid));
+            if (reportedNear) continue;
             if (_coPresentTicks[peer.Id] < SilenceGraceTicks) continue;
             if (!_silenceAccusedThisCommitment.Add(peer.Id)) continue;
 
-            RegisterOffense(peer.Id);
+            RegisterOffense(peer.Id, ReputationOffenseKind.Silence);
             // Authenticated disappointment: evidence-tied, not a free-form blacklist broadcast.
             ctx.World.Transmit(
                 this,
@@ -343,19 +309,28 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
                 !IncidentMarker.DisappointmentAuthorTypes.Contains(sender.AgentType))
                 continue;
             // Soft weight: gossip corroborates but does not escalate like direct offense.
-            UpdateTrust(accused, success: false, weight: FirstOffenseWeight * 0.5);
+            var soft = FirstOffenseWeight * 0.5;
+            UpdateTrust(accused, success: false, weight: soft);
+            AccrueDisrepute(accused, ReputationOffenseKind.Gossip, soft);
         }
     }
 
     /// <summary>
     /// Escalating penalty: first offense soft (teammate recoverable); repeats grow as 2^(n-1).
     /// </summary>
-    private void RegisterOffense(int senderId)
+    private void RegisterOffense(int senderId, ReputationOffenseKind kind)
     {
         var n = _offenseCount.GetValueOrDefault(senderId) + 1;
         _offenseCount[senderId] = n;
         var weight = FirstOffenseWeight * Math.Pow(2, n - 1);
         UpdateTrust(senderId, success: false, weight: weight);
+        AccrueDisrepute(senderId, kind, weight);
+    }
+
+    private void AccrueDisrepute(int targetId, ReputationOffenseKind kind, double weight)
+    {
+        _disreputeToward.TryGetValue(targetId, out var bucket);
+        _disreputeToward[targetId] = bucket.Add(kind, weight);
     }
 
     private void RegisterSuccess(int senderId)
@@ -400,7 +375,87 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     private readonly record struct BetaTrust(double Alpha, double Beta);
 
     private readonly record struct PendingProbe(
-        int SenderId, Vec2 Claimed, long DeadlineTick, int IncidentId);
+        int SenderId, Vec2 Claimed, long DeadlineTick, int IncidentId, int TicksNear = 0);
+}
+
+/// <summary>Channels that increase private Beta (disrepute) on <see cref="MitigatedOrbitAgent"/>.</summary>
+public enum ReputationOffenseKind
+{
+    /// <summary>Peer kept closing inside personal space after yield.</summary>
+    Herding = 0,
+    /// <summary>Co-present at announced event without reporting.</summary>
+    Silence = 1,
+    /// <summary>Urged a saturated / full station.</summary>
+    Saturated = 2,
+    /// <summary>Followed claim failed verification.</summary>
+    Verify = 3,
+    /// <summary>Soft weight from authenticated disappointment gossip.</summary>
+    Gossip = 4
+}
+
+/// <summary>Per-peer cumulative penalty counts and weights by <see cref="ReputationOffenseKind"/>.</summary>
+public readonly struct DisreputeBucket
+{
+    /// <summary>Total penalty weight (sum of Beta increments).</summary>
+    public double TotalWeight { get; init; }
+
+    /// <summary>Offense event counts by kind (index = <see cref="ReputationOffenseKind"/>).</summary>
+    public int Herding { get; init; }
+    /// <inheritdoc cref="Herding"/>
+    public int Silence { get; init; }
+    /// <inheritdoc cref="Herding"/>
+    public int Saturated { get; init; }
+    /// <inheritdoc cref="Herding"/>
+    public int Verify { get; init; }
+    /// <inheritdoc cref="Herding"/>
+    public int Gossip { get; init; }
+
+    /// <summary>Penalty weight by kind.</summary>
+    public double HerdingWeight { get; init; }
+    /// <inheritdoc cref="HerdingWeight"/>
+    public double SilenceWeight { get; init; }
+    /// <inheritdoc cref="HerdingWeight"/>
+    public double SaturatedWeight { get; init; }
+    /// <inheritdoc cref="HerdingWeight"/>
+    public double VerifyWeight { get; init; }
+    /// <inheritdoc cref="HerdingWeight"/>
+    public double GossipWeight { get; init; }
+
+    /// <summary>Returns a copy with <paramref name="kind"/> incremented by <paramref name="weight"/>.</summary>
+    public DisreputeBucket Add(ReputationOffenseKind kind, double weight) => kind switch
+    {
+        ReputationOffenseKind.Herding => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Herding = Herding + 1,
+            HerdingWeight = HerdingWeight + weight
+        },
+        ReputationOffenseKind.Silence => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Silence = Silence + 1,
+            SilenceWeight = SilenceWeight + weight
+        },
+        ReputationOffenseKind.Saturated => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Saturated = Saturated + 1,
+            SaturatedWeight = SaturatedWeight + weight
+        },
+        ReputationOffenseKind.Verify => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Verify = Verify + 1,
+            VerifyWeight = VerifyWeight + weight
+        },
+        ReputationOffenseKind.Gossip => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Gossip = Gossip + 1,
+            GossipWeight = GossipWeight + weight
+        },
+        _ => this with { TotalWeight = TotalWeight + weight }
+    };
 }
 
 /// <summary>Factory for <see cref="MitigatedOrbitAgent"/>.</summary>

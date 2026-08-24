@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using SensorAnalysis.Agents;
 using SensorAnalysis.Agents.Deployers;
 using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Agents.Watchers;
@@ -31,8 +32,8 @@ namespace SensorAnalysis.App.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly Core.World.SimulationRunner _runner = new();
-    private readonly AgentFactoryRegistry _factories = new();
-    private readonly Dictionary<string, Func<IDeployer>> _deployerFactories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AgentFactoryRegistry _factories;
+    private readonly Dictionary<string, Func<IDeployer>> _deployerFactories;
     private readonly DispatcherTimer _runTimer;
     private readonly CoverageWatcher _coverageWatcher = new(sampleEveryTicks: 1);
     private readonly ConnectivityWatcher _connectivityWatcher = new(sampleEveryTicks: 1);
@@ -52,11 +53,23 @@ public partial class MainViewModel : ObservableObject
     /// <summary>Set by the view so we can capture frames of the live canvas.</summary>
     public WorldCanvas? Canvas { get; set; }
 
+    /// <summary>Trials/ticks from the last loaded recipe; used by Run Experiment when set.</summary>
+    private int? _recipeTrials;
+    private int? _recipeTicks;
+
+    /// <summary>Non-dialog AVI path when set by --record-video PATH.</summary>
+    private string? _autoVideoPath;
+
+    /// <summary>Shut down the process when Stop completes (unattended capture).</summary>
+    private bool _exitOnStop;
+
+    private GuiStartupOptions _startup = new();
+
     /// <summary>Creates a new instance of <see cref="MainViewModel"/> and initializes application state.</summary>
     public MainViewModel()
     {
-        RegisterFactories();
-        RegisterDeployers();
+        _factories = BuiltinCatalog.CreateAgents();
+        _deployerFactories = BuiltinCatalog.CreateDeployers();
 
         AgentTypeNames = new ObservableCollection<string>(_factories.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
         IncidentTypeNames = new ObservableCollection<string>(new[] { "Incident", "Hotspot", "Distress" });
@@ -78,6 +91,7 @@ public partial class MainViewModel : ObservableObject
         _runTimer.Tick += (_, _) => AdvanceOneTick();
 
         NewWorld();
+        _startup = GuiStartupOptions.Parse(Environment.GetCommandLineArgs().Skip(1).ToArray());
     }
 
     [ObservableProperty] private SimWorld? _world;
@@ -208,7 +222,9 @@ public partial class MainViewModel : ObservableObject
         Title = o.Title,
         TileCount = o.TileCount,
         TileSizePx = o.TileSizePx,
-        TileShape = o.TileShape
+        TileShape = o.TileShape,
+        ExactSensing = o.ExactSensing,
+        Sensing = o.Sensing.Clone()
     };
 
     /// <summary>Clear the radio traffic panel.</summary>
@@ -318,8 +334,9 @@ public partial class MainViewModel : ObservableObject
     {
         if (RecordFrames)
         {
-            _frameDirectory = Path.Combine(Environment.CurrentDirectory, "experiments",
-                $"frames-{DateTime.Now:yyyyMMdd-HHmmss}");
+            _frameDirectory = _startup.FramesDirectory
+                ?? Path.Combine(Environment.CurrentDirectory, "experiments",
+                    $"frames-{DateTime.Now:yyyyMMdd-HHmmss}");
             Directory.CreateDirectory(_frameDirectory);
             StatusText = $"Running (recording frames → {_frameDirectory})…";
         }
@@ -337,7 +354,7 @@ public partial class MainViewModel : ObservableObject
                 : "Running (recording video)…";
         }
 
-        _autoStopAt = long.MaxValue;
+        _autoStopAt = _startup.AutoStopTicks is int stopAt ? stopAt : long.MaxValue;
         IsRunning = true;
         _runTimer.Start();
     }
@@ -355,10 +372,13 @@ public partial class MainViewModel : ObservableObject
             FinalizeVideoRecording();
         else if (!finalizeVideo)
             _videoRecorder.Clear();
+        else if (_frameDirectory is not null)
+            StatusText = $"Stopped. Frames in {_frameDirectory}";
+        else
+            StatusText = "Stopped.";
 
-        StatusText = _frameDirectory is not null
-            ? $"Stopped. Frames in {_frameDirectory}"
-            : "Stopped.";
+        if (_exitOnStop && finalizeVideo)
+            Application.Current.Shutdown();
     }
 
     private void FinalizeVideoRecording()
@@ -370,30 +390,43 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        var dlg = new SaveFileDialog
+        string? path = _autoVideoPath;
+        if (string.IsNullOrWhiteSpace(path))
         {
-            Filter = "AVI Video|*.avi",
-            FileName = $"sim-{DateTime.Now:yyyyMMdd-HHmmss}.avi"
-        };
-        if (dlg.ShowDialog() != true)
+            var dlg = new SaveFileDialog
+            {
+                Filter = "AVI Video|*.avi",
+                FileName = $"sim-{DateTime.Now:yyyyMMdd-HHmmss}.avi"
+            };
+            if (dlg.ShowDialog() != true)
+            {
+                _videoRecorder.Clear();
+                return;
+            }
+
+            path = dlg.FileName;
+        }
+        else
         {
-            _videoRecorder.Clear();
-            return;
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
         }
 
         var fps = Math.Clamp(1000.0 / Math.Max(1, TickDelayMs), 1, 60);
         try
         {
-            if (_videoRecorder.SaveAvi(dlg.FileName, fps))
-                StatusText = $"Stopped. Video saved: {dlg.FileName} ({fps:0.#} fps)";
+            if (_videoRecorder.SaveAvi(path, fps))
+                StatusText = $"Stopped. Video saved: {path} ({fps:0.#} fps)";
             else
                 StatusText = "Stopped (no video frames).";
         }
         catch (Exception ex)
         {
             _videoRecorder.Clear();
-            MessageBox.Show($"Failed to write AVI:\n{ex.Message}", "Record video");
-            StatusText = "Stopped (video save failed).";
+            if (_autoVideoPath is null)
+                MessageBox.Show($"Failed to write AVI:\n{ex.Message}", "Record video");
+            StatusText = $"Stopped (video save failed): {ex.Message}";
         }
     }
 
@@ -503,7 +536,131 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Run a small batch experiment from the first tick-0 directive (or draft defaults),
+    /// Apply CLI startup options: optional recipe load, recording flags, then optional auto-Run.
+    /// Call after the canvas is bound so the first captured frames are valid.
+    /// </summary>
+    public void TryLoadStartupRecipe()
+    {
+        _startup = GuiStartupOptions.Parse(Environment.GetCommandLineArgs().Skip(1).ToArray());
+
+        if (_startup.TickDelayMs is int delay)
+            TickDelayMs = Math.Max(1, delay);
+        if (_startup.FrameEveryNTicks is int every)
+            FrameEveryNTicks = Math.Max(1, every);
+        if (_startup.RecordVideo)
+            RecordVideo = true;
+        if (_startup.RecordFrames)
+            RecordFrames = true;
+        _autoVideoPath = _startup.VideoPath;
+        _exitOnStop = _startup.ExitOnStop;
+
+        if (_startup.RecipePath is string json)
+        {
+            try
+            {
+                ApplyRecipe(RecipeSerializer.Load(json), json);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Could not load recipe:\n{json}\n\n{ex.Message}", "Open Recipe");
+                if (_exitOnStop)
+                    Application.Current.Shutdown();
+                return;
+            }
+        }
+
+        if (!_startup.AutoRun)
+            return;
+
+        // Defer one dispatcher pump so layout/canvas render size is ready.
+        Application.Current.Dispatcher.BeginInvoke(
+            DispatcherPriority.Loaded,
+            () =>
+            {
+                if (_startup.AutoStopTicks is int ticks && _recipeTicks is null)
+                    _recipeTicks = ticks;
+                Run();
+            });
+    }
+
+    /// <summary>Open a recipe JSON (world + directive log). Does not replace form-based editing.</summary>
+    [RelayCommand]
+    private void LoadRecipe()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "Recipe JSON|*.json",
+            FileName = ExperimentRecipe.DefaultFileName
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            ApplyRecipe(RecipeSerializer.Load(dlg.FileName), dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Open Recipe");
+        }
+    }
+
+    /// <summary>Save the current world options and directive log as a CLI/GUI recipe JSON.</summary>
+    [RelayCommand]
+    private void SaveRecipe()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Filter = "Recipe JSON|*.json",
+            FileName = ExperimentRecipe.DefaultFileName
+        };
+        if (dlg.ShowDialog() != true) return;
+        RecipeSerializer.Save(dlg.FileName, BuildRecipeFromUi());
+        StatusText = $"Recipe saved: {dlg.FileName}";
+    }
+
+    private void ApplyRecipe(ExperimentRecipe recipe, string path)
+    {
+        Stop(finalizeVideo: false);
+        _videoRecorder.Clear();
+        _lastWorldOptions = recipe.ToWorldOptions();
+        _lastSeed = recipe.Seed;
+        _recipeTrials = recipe.Trials;
+        _recipeTicks = recipe.Ticks;
+
+        Directives.Clear();
+        foreach (var d in recipe.Directives)
+        {
+            Directives.Add(new EnvironmentDirective
+            {
+                AtTick = d.AtTick,
+                DeployerName = d.Deployer,
+                Salt = d.Salt,
+                Parameters = new Dictionary<string, object?>(d.Parameters, StringComparer.Ordinal)
+            });
+        }
+
+        SelectedDirective = Directives.FirstOrDefault();
+        ResetWorld(_lastWorldOptions, _lastSeed);
+        StatusText = $"Loaded recipe: {path} ({Directives.Count} directive(s)). Edit with the form or Step/Run.";
+    }
+
+    private ExperimentRecipe BuildRecipeFromUi() => new()
+    {
+        ExperimentName = string.IsNullOrWhiteSpace(_lastWorldOptions.Title) ? "gui" : _lastWorldOptions.Title,
+        Trials = _recipeTrials ?? 5,
+        Ticks = _recipeTicks ?? 200,
+        Seed = _lastSeed,
+        World = RecipeWorld.FromWorldOptions(_lastWorldOptions),
+        Directives = Directives.Select(d => new RecipeDirective
+        {
+            AtTick = d.AtTick,
+            Deployer = d.DeployerName,
+            Salt = d.Salt,
+            Parameters = d.Parameters
+        }).ToList()
+    };
+
+    /// <summary>
+    /// Run a small batch experiment from the directive log,
     /// collect metrics and export results to the experiments folder.
     /// </summary>
     [RelayCommand]
@@ -512,17 +669,18 @@ public partial class MainViewModel : ObservableObject
         Stop();
         if (_runner.World is null) return;
 
+        var trials = Math.Max(1, _recipeTrials ?? 5);
+        var ticks = Math.Max(1, _recipeTicks ?? 200);
         var result = MessageBox.Show(
-            "Run 5 trials × 200 ticks and export metrics to ./experiments/ ?",
+            $"Run {trials} trials × {ticks} ticks and export metrics to ./experiments/ ?",
             "Run Experiment",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
         if (result != MessageBoxResult.Yes) return;
 
-        var tick0 = Directives.Where(d => d.AtTick == 0).ToList();
-        if (tick0.Count == 0)
+        if (Directives.Count == 0)
         {
-            MessageBox.Show("Add at least one tick-0 environment directive first.", "Run Experiment");
+            MessageBox.Show("Add at least one environment directive first.", "Run Experiment");
             return;
         }
 
@@ -536,13 +694,13 @@ public partial class MainViewModel : ObservableObject
         runner.AddWatcher(clearance);
         runner.AddWatcher(trustTel);
 
-        var steps = tick0.Select(ToDeployStep).ToList();
+        var steps = Directives.Select(ToDeployStep).ToList();
         var manifest = runner.RunExperiment(new Core.World.ExperimentRequest
         {
             ExperimentName = "gui-batch",
-            BaseSeed = 100,
-            Trials = 5,
-            TicksPerTrial = 200,
+            BaseSeed = _lastSeed,
+            Trials = trials,
+            TicksPerTrial = ticks,
             WorldOptions = CloneOptions(_lastWorldOptions),
             Steps = steps,
             Context = CreateDeployContext(0),
@@ -620,7 +778,7 @@ public partial class MainViewModel : ObservableObject
             if (!_deployerFactories.ContainsKey(d.DeployerName))
                 throw new InvalidOperationException($"Unknown deployer '{d.DeployerName}'.");
 
-            var salt = unchecked((int)d.AtTick * 1009 ^ d.Id);
+            var salt = d.Salt;
             var step = ToDeployStep(d);
             _runner.AttachDeployer(step, CreateDeployContext(salt));
             d.IsApplied = true;
@@ -644,7 +802,9 @@ public partial class MainViewModel : ObservableObject
         return new DeployStep
         {
             CreateDeployer = factory,
-            Options = options
+            Options = options,
+            AtTick = d.AtTick,
+            RandomSalt = d.Salt
         };
     }
 
@@ -997,33 +1157,5 @@ public partial class MainViewModel : ObservableObject
             })
         });
         SelectedDirective = Directives[0];
-    }
-
-    private void RegisterFactories()
-    {
-        _factories.Register(new RandomWalkAgentFactory());
-        _factories.Register(new GreedyIncidentAgentFactory());
-        _factories.Register(new StigmergyAgentFactory());
-        _factories.Register(new CooperativeSearchAgentFactory());
-        _factories.Register(new DeceptiveStigmergyAgentFactory());
-        _factories.Register(new TrustAwareSearchAgentFactory());
-        _factories.Register(new OrbitingCoopAgentFactory());
-        _factories.Register(new HerdingDeceptiveAgentFactory());
-        _factories.Register(new MitigatedOrbitAgentFactory());
-    }
-
-    private void RegisterDeployers()
-    {
-        void Add(Func<IDeployer> factory)
-        {
-            var sample = factory();
-            _deployerFactories[sample.Name] = factory;
-        }
-
-        Add(() => new RandomDeployer());
-        Add(() => new GaussianDeployer());
-        Add(() => new UniformIncidentDeployer());
-        Add(() => new PeriodicIncidentDeployer());
-        Add(() => new PlaceNearDeployer());
     }
 }

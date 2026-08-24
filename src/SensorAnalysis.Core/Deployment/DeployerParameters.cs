@@ -180,6 +180,21 @@ public static class DeployerParameterCatalog
 
     private static object? ConvertValue(object raw, Type target)
     {
+        if (raw is System.Text.Json.JsonElement je)
+        {
+            raw = je.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.Null => null!,
+                System.Text.Json.JsonValueKind.Undefined => null!,
+                System.Text.Json.JsonValueKind.String => je.GetString()!,
+                System.Text.Json.JsonValueKind.True => true,
+                System.Text.Json.JsonValueKind.False => false,
+                System.Text.Json.JsonValueKind.Number => je.GetDouble(),
+                _ => je.GetRawText()
+            };
+        }
+
+        if (raw is null) return null;
         if (target.IsInstanceOfType(raw)) return raw;
         if (target == typeof(string)) return Convert.ToString(raw);
         if (target == typeof(bool)) return Convert.ToBoolean(raw);

@@ -120,7 +120,10 @@ public sealed record AgentObservation
     /// <summary>Information about other agents within sensory range.</summary>
     public required IReadOnlyList<AgentInfo> NearbyAgents { get; init; }
 
-    /// <summary>Information about incidents within sensory range.</summary>
+    /// <summary>
+    /// Local event cues this tick (not an oracle dump of world incidents).
+    /// In cue-sensing mode <see cref="IncidentInfo.Id"/> is 0 and Position is perceived.
+    /// </summary>
     public required IReadOnlyList<IncidentInfo> NearbyIncidents { get; init; }
 
     /// <summary>
@@ -151,11 +154,12 @@ public sealed record AgentObservation
 /// <param name="AgentType">Type/factory name of the agent.</param>
 public readonly record struct AgentInfo(int Id, Vec2 Position, string AgentType);
 
-/// <summary>Lightweight information about an incident.</summary>
-/// <param name="Id">Unique runtime identifier of the incident.</param>
-/// <param name="Position">Incident position.</param>
+/// <summary>Lightweight information about an incident or a local cue.</summary>
+/// <param name="Id">World incident id, or 0 for a cue (no oracle identity).</param>
+/// <param name="Position">True position (exact sensing) or perceived position (cue).</param>
 /// <param name="Intensity">Incident intensity (domain-specific meaning).</param>
-public readonly record struct IncidentInfo(int Id, Vec2 Position, double Intensity);
+/// <param name="Strength">Cue strength in [0, 1]; 1 for exact sensing.</param>
+public readonly record struct IncidentInfo(int Id, Vec2 Position, double Intensity, double Strength = 1.0);
 
 /// <summary>Lightweight information about a message observed by an agent.</summary>
 /// <param name="Id">Unique runtime identifier of the message.</param>

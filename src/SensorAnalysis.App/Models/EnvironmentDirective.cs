@@ -158,6 +158,9 @@ public partial class EnvironmentDirective : ObservableObject
     /// <summary>Registered deployer name.</summary>
     [ObservableProperty] private string _deployerName = "Gaussian";
 
+    /// <summary>RNG salt mixed into the deployer (0 is the shared CLI/GUI default).</summary>
+    public int Salt { get; set; }
+
     /// <summary>Captured options property values.</summary>
     public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.Ordinal);
 

@@ -83,6 +83,26 @@ public sealed class SimulationRunner
         World.AddDeployer(deployer);
     }
 
+    private void ApplyDueSteps(
+        IReadOnlyList<DeployStep> steps,
+        HashSet<int> applied,
+        long tick,
+        DeployContext baseContext)
+    {
+        for (int i = 0; i < steps.Count; i++)
+        {
+            if (applied.Contains(i)) continue;
+            var step = steps[i];
+            if (step.AtTick > tick) continue;
+            applied.Add(i);
+            AttachDeployer(step, new DeployContext
+            {
+                ResolveAgent = baseContext.ResolveAgent,
+                RandomSalt = step.RandomSalt
+            });
+        }
+    }
+
     /// <summary>Single interactive step.</summary>
     public void Step()
     {
@@ -136,7 +156,9 @@ public sealed class SimulationRunner
             Reset(request.WorldOptions, seed);
             World!.CurrentTrial = trial;
 
-            Deploy(request.Steps, request.Context);
+            var applied = new HashSet<int>();
+            ApplyDueSteps(request.Steps, applied, tick: 0, request.Context);
+
             agentTypes = World.Agents.Select(a => a.AgentType).Distinct().ToArray();
             agentCount = World.Agents.Count;
             incidentHint = World.Incidents.Count;
@@ -144,7 +166,20 @@ public sealed class SimulationRunner
             foreach (var w in _watchers)
                 w.OnTrialStart(World, trial);
 
-            RunTicks(request.TicksPerTrial, ct);
+            IsRunning = true;
+            try
+            {
+                for (int i = 0; i < request.TicksPerTrial; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    ApplyDueSteps(request.Steps, applied, World.CurrentTick, request.Context);
+                    Step();
+                }
+            }
+            finally
+            {
+                IsRunning = false;
+            }
 
             foreach (var w in _watchers)
                 w.OnTrialEnd(World, trial);
@@ -181,6 +216,12 @@ public sealed class DeployStep
 
     /// <summary>Options object matching the deployer's <see cref="IDeployer.OptionsType"/>.</summary>
     public required object Options { get; init; }
+
+    /// <summary>Attach when the world tick reaches this value (0 = before the first step).</summary>
+    public long AtTick { get; init; }
+
+    /// <summary>Per-step RNG salt (0 is the shared CLI/GUI default).</summary>
+    public int RandomSalt { get; init; }
 }
 
 /// <summary>

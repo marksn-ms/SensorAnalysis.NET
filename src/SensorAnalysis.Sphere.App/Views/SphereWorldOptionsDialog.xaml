@@ -1,0 +1,56 @@
+<Window x:Class="SensorAnalysis.Sphere.App.Views.SphereWorldOptionsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="New World Options" SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        MinWidth="380" ShowInTaskbar="False">
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto"/>
+      <ColumnDefinition Width="210"/>
+    </Grid.ColumnDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Title" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="1" Text="Seed" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Seed, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="2" Text="Radius R" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Radius, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="3" Text="Default sensor r" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding SensorRange, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="4" Text="Default comm c" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CommunicationRange, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="5" Text="Geodesic resolution n" VerticalAlignment="Center" Margin="0,4,12,4"
+               ToolTip="Maps radius R onto an internal 20n²-face spatial index"/>
+    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Resolution, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="6" Text="Default step size" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StepSize, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="7" Grid.ColumnSpan="2" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,10,0,4" Opacity="0.8"/>
+    <TextBlock Grid.Row="8" Grid.ColumnSpan="2" Text="{Binding Warning}" TextWrapping="Wrap" Foreground="#B85C00" Margin="0,0,0,8"/>
+
+    <StackPanel Grid.Row="9" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="OK" IsDefault="True" Width="72" Margin="0,0,8,0" Click="Ok_Click"
+              IsEnabled="{Binding CanAccept}"/>
+      <Button Content="Cancel" IsCancel="True" Width="72" Click="Cancel_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>

@@ -33,6 +33,15 @@ public sealed class PlaceNearOptions
     /// <summary>Logical incident kind for styling / filtering (default <c>Incident</c>).</summary>
     [DeployerParam("Incident type", IsIncidentType = true, Required = false)]
     public string IncidentType { get; set; } = "Incident";
+
+    /// <summary>
+    /// When true, shuffle hosts once per trial and cycle through them (preferring
+    /// hosts that do not already cover an active incident) instead of picking
+    /// uniformly at random each spawn.
+    /// </summary>
+    [DeployerParam("Round-robin hosts", Required = false,
+        Description = "Cycle shuffled hosts; skip hosts that already have a nearby incident.")]
+    public bool RoundRobinHosts { get; set; }
 }
 
 /// <summary>
@@ -47,6 +56,8 @@ public sealed class PlaceNearDeployer : IDeployer
     private int _randomSalt;
     private int _waveIndex;
     private bool _dormant = true;
+    private int[]? _hostOrder;
+    private int _hostCursor;
 
     /// <inheritdoc />
     public string Name => "PlaceNear";
@@ -71,6 +82,8 @@ public sealed class PlaceNearDeployer : IDeployer
         _world = world;
         _randomSalt = context.RandomSalt;
         _waveIndex = 0;
+        _hostOrder = null;
+        _hostCursor = 0;
         if (_options.Count < 1) _options.Count = 1;
         if (_options.RangeFactor < 0) _options.RangeFactor = 0;
 
@@ -102,14 +115,68 @@ public sealed class PlaceNearDeployer : IDeployer
         var rng = new Random(unchecked(world.Seed ^ salt ^ waveIndex * 104729));
         for (int i = 0; i < o.Count; i++)
         {
+            var position = o.RoundRobinHosts
+                ? PlaceRoundRobin(world, rng, o)
+                : IncidentPlacementHelper.PlaceNearType(
+                    world, rng, o.NearTypeName, o.RangeFactor);
             world.Add(new Incident
             {
-                Position = IncidentPlacementHelper.PlaceNearType(
-                    world, rng, o.NearTypeName, o.RangeFactor),
+                Position = position,
                 Intensity = 1.0,
                 IncidentType = string.IsNullOrWhiteSpace(o.IncidentType) ? "Incident" : o.IncidentType,
                 Label = $"I-near-{waveIndex}-{i}"
             });
         }
+    }
+
+    private Vec2 PlaceRoundRobin(SimWorld world, Random rng, PlaceNearOptions o)
+    {
+        var hosts = world.Agents
+            .Where(a => string.Equals(a.AgentType, o.NearTypeName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (hosts.Count == 0)
+            return IncidentPlacementHelper.PlaceUniform(world, rng);
+
+        EnsureHostOrder(hosts, rng);
+        var free = hosts.Where(h =>
+            IncidentPlacementHelper.HostIsFreeOfIncidents(world, h, o.RangeFactor)).ToList();
+        var pool = free.Count > 0 ? free : hosts;
+
+        var host = NextHostInOrder(pool) ?? pool[rng.Next(pool.Count)];
+        return IncidentPlacementHelper.PlaceNearAgent(world, rng, host, o.RangeFactor);
+    }
+
+    private void EnsureHostOrder(List<Agent> hosts, Random rng)
+    {
+        var ids = hosts.Select(h => h.Id).OrderBy(id => id).ToArray();
+        if (_hostOrder is not null &&
+            _hostOrder.Length == ids.Length &&
+            _hostOrder.OrderBy(id => id).SequenceEqual(ids))
+            return;
+
+        _hostOrder = hosts.Select(h => h.Id).ToArray();
+        for (int i = _hostOrder.Length - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (_hostOrder[i], _hostOrder[j]) = (_hostOrder[j], _hostOrder[i]);
+        }
+        _hostCursor = 0;
+    }
+
+    private Agent? NextHostInOrder(List<Agent> pool)
+    {
+        if (_hostOrder is null || _hostOrder.Length == 0 || pool.Count == 0)
+            return null;
+
+        for (int n = 0; n < _hostOrder.Length; n++)
+        {
+            var id = _hostOrder[(_hostCursor + n) % _hostOrder.Length];
+            var host = pool.FirstOrDefault(h => h.Id == id);
+            if (host is null) continue;
+            _hostCursor = (_hostCursor + n + 1) % _hostOrder.Length;
+            return host;
+        }
+
+        return null;
     }
 }

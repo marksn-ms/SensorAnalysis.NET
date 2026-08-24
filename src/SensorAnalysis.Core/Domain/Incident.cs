@@ -1,8 +1,11 @@
+using SensorAnalysis.Core.Sensing;
+
 namespace SensorAnalysis.Core.Domain;
 
 /// <summary>
 /// A point of interest / event in the environment that agents try to discover or cover
-/// (classic "Incident").
+/// (classic "Incident"). Ground truth stays here; agents see <see cref="IncidentSensingProfile"/>
+/// cues, not this object.
 /// </summary>
 public class Incident : WorldObject
 {
@@ -19,12 +22,18 @@ public class Incident : WorldObject
     public double DrainPerAgentPerTick { get; set; } = 0.01;
 
     /// <summary>
-    /// Exponent on the number of draining agents. 1 = linear; &gt;1 rewards multiple eyes on an event.
+    /// Exponent on the number of draining agents (only the closest N per incident count; default cap 3).
+    /// 1 = linear; &gt;1 rewards multiple eyes on an event up to the cap.
     /// </summary>
     public double MultiAgentDrainExponent { get; set; } = 1.5;
 
     /// <summary>True when intensity has been fully drained.</summary>
     public bool IsDepleted => Intensity <= 0;
+
+    /// <summary>
+    /// Optional per-event sensing override. <c>null</c> uses <c>WorldOptions.Sensing</c>.
+    /// </summary>
+    public IncidentSensingProfile? Sensing { get; set; }
 
     /// <summary>
     /// Per-tick update for this incident. Intensity draining is handled by the world engine after agents move.

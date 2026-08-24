@@ -88,6 +88,74 @@ public class DeployerTickTests
             .Should().BeLessThanOrEqualTo(host.SensorRange * 0.5 * 1.15 + 1e-6);
     }
 
+    /// <summary>Round-robin PlaceNear assigns one incident per host instead of stacking.</summary>
+    [Fact]
+    public void PlaceNear_RoundRobin_SpreadsAcrossHosts()
+    {
+        var w = new SimWorld(new WorldOptions
+        {
+            TileCount = new GridSize(8, 8),
+            TileSizePx = new GridSize(25, 25)
+        }, seed: 7);
+
+        var hosts = new[]
+        {
+            new RandomWalkAgent(seed: 1) { Position = new Vec2(40, 40), SensorRange = 40 },
+            new RandomWalkAgent(seed: 2) { Position = new Vec2(160, 40), SensorRange = 40 },
+            new RandomWalkAgent(seed: 3) { Position = new Vec2(40, 160), SensorRange = 40 }
+        };
+        foreach (var host in hosts)
+            w.Add(host);
+
+        var near = new PlaceNearDeployer();
+        near.Attach(w, new PlaceNearOptions
+        {
+            Count = 3,
+            NearTypeName = "RandomWalk",
+            RangeFactor = 0.5,
+            PeriodTicks = 0,
+            RoundRobinHosts = true
+        }, Ctx());
+
+        w.Incidents.Should().HaveCount(3);
+
+        var assigned = w.Incidents
+            .Select(inc => hosts.OrderBy(h => w.Distance(inc.Position, h.Position)).First().Id)
+            .Distinct()
+            .ToList();
+        assigned.Should().HaveCount(3);
+    }
+
+    /// <summary>HerdingDeceptive orbits a visible event when no honest peer is in range.</summary>
+    [Fact]
+    public void HerdingDeceptive_OrbitsVisibleEvent_WhenAlone()
+    {
+        var w = new SimWorld(new WorldOptions
+        {
+            TileCount = new GridSize(10, 10),
+            TileSizePx = new GridSize(40, 40),
+            ExactSensing = true
+        }, seed: 3);
+
+        var dog = new HerdingDeceptiveAgent(seed: 11)
+        {
+            Position = new Vec2(200, 200),
+            SensorRange = 80
+        };
+        w.Add(dog);
+        w.Add(new Incident
+        {
+            Position = new Vec2(200, 140),
+            Intensity = 1.0
+        });
+
+        for (int i = 0; i < 80; i++)
+            w.Tick();
+
+        var dist = w.Distance(dog.Position, new Vec2(200, 140));
+        dist.Should().BeInRange(20, 60);
+    }
+
     /// <summary>Additive attach does not clear existing agents.</summary>
     [Fact]
     public void AttachDeployer_DoesNotClearExistingEntities()

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>SensorAnalysis.Sphere.App</AssemblyName>
+    <RootNamespace>SensorAnalysis.Sphere.App</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Sphere.Core\SensorAnalysis.Sphere.Core.csproj" />
+  </ItemGroup>
+</Project>

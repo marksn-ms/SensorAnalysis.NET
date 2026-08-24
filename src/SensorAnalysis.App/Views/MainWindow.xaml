@@ -14,6 +14,8 @@
         <MenuItem Header="New World (_options)…" Command="{Binding NewWorldWithOptionsCommand}"/>
         <MenuItem Header="_Open Scenario…" Command="{Binding LoadScenarioCommand}"/>
         <MenuItem Header="_Save Scenario…" Command="{Binding SaveScenarioCommand}"/>
+        <MenuItem Header="Open _Recipe…" Command="{Binding LoadRecipeCommand}"/>
+        <MenuItem Header="Save R_ecipe…" Command="{Binding SaveRecipeCommand}"/>
         <Separator/>
         <MenuItem Header="_Export Metrics…" Command="{Binding ExportCommand}"/>
         <MenuItem Header="Capture _Frame" Command="{Binding CaptureFrameCommand}"/>

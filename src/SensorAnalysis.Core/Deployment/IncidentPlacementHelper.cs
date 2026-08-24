@@ -37,6 +37,24 @@ public static class IncidentPlacementHelper
             return PlaceUniform(world, rng);
 
         var host = hosts[rng.Next(hosts.Count)];
+        return PlaceNearAgent(world, rng, host, rangeFactor);
+    }
+
+    /// <summary>
+    /// Place near a specific living host. Radius is
+    /// <paramref name="rangeFactor"/> × host <see cref="Agent.SensorRange"/>
+    /// (with light jitter).
+    /// </summary>
+    /// <param name="world">Target world.</param>
+    /// <param name="rng">Deterministic RNG.</param>
+    /// <param name="host">Agent to place near.</param>
+    /// <param name="rangeFactor">Fraction of host sensor range (e.g. 0.5).</param>
+    public static Vec2 PlaceNearAgent(
+        SimWorld world,
+        Random rng,
+        Agent host,
+        double rangeFactor)
+    {
         var factor = Math.Max(0.0, rangeFactor);
         // Mild radial jitter so stacked waves are not identical.
         var radius = host.SensorRange * factor * (0.85 + 0.3 * rng.NextDouble());
@@ -44,5 +62,22 @@ public static class IncidentPlacementHelper
         return world.Wrap(new Vec2(
             host.Position.X + Math.Cos(angle) * radius,
             host.Position.Y + Math.Sin(angle) * radius));
+    }
+
+    /// <summary>
+    /// True when <paramref name="host"/> has no active incident inside the
+    /// PlaceNear jitter radius (rangeFactor × sensor range × 1.15).
+    /// </summary>
+    /// <param name="world">Target world.</param>
+    /// <param name="host">Candidate host.</param>
+    /// <param name="rangeFactor">Same factor used for placement.</param>
+    public static bool HostIsFreeOfIncidents(
+        SimWorld world,
+        Agent host,
+        double rangeFactor)
+    {
+        var radius = host.SensorRange * Math.Max(0.0, rangeFactor) * 1.15;
+        return !world.Incidents.Any(i =>
+            !i.IsDepleted && world.Distance(i.Position, host.Position) <= radius);
     }
 }

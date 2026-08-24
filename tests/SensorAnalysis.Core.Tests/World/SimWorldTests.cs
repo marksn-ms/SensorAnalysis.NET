@@ -15,7 +15,8 @@ public class SimWorldTests
         new(new WorldOptions
         {
             TileCount = new GridSize(8, 8),
-            TileSizePx = new GridSize(25, 25)
+            TileSizePx = new GridSize(25, 25),
+            ExactSensing = true
         }, seed);
 
     /// <summary>Verifies identical seeds and agent setups produce identical tick trajectories.</summary>
@@ -133,5 +134,57 @@ public class SimWorldTests
             w.Tick();
 
         incident.Intensity.Should().BeLessThan(1.0);
+    }
+
+    /// <summary>Only the closest N in-range agents contribute to drain; extras do not accelerate clearance.</summary>
+    [Fact]
+    public void Incident_DrainCapsAtClosestContributors()
+    {
+        var w = CreateWorld();
+        w.Options.MaxDrainingAgentsPerIncident = 3;
+        var incident = new Incident
+        {
+            Position = new Vec2(50, 50),
+            Intensity = 1.0,
+            DrainPerAgentPerTick = 0.1,
+            MultiAgentDrainExponent = 1.0
+        };
+        w.Add(incident);
+
+        // Five agents in range; only three closest should count (linear exponent ⇒ 0.3/tick).
+        w.Add(new Agent { Position = new Vec2(50, 50), SensorRange = 20 });   // d=0
+        w.Add(new Agent { Position = new Vec2(52, 50), SensorRange = 20 });   // d=2
+        w.Add(new Agent { Position = new Vec2(54, 50), SensorRange = 20 });   // d=4
+        w.Add(new Agent { Position = new Vec2(60, 50), SensorRange = 20 });   // d=10 — excluded
+        w.Add(new Agent { Position = new Vec2(65, 50), SensorRange = 20 });   // d=15 — excluded
+
+        w.Tick();
+        incident.Intensity.Should().BeApproximately(0.7, 1e-9);
+
+        // Move the two far agents closer so all five qualify by range but cap stays at 3.
+        w.Agents[3].Position = new Vec2(51, 50); // d=1 — now among closest three
+        w.Agents[4].Position = new Vec2(53, 50); // d=3 — still outside top 3
+        w.Tick();
+        incident.Intensity.Should().BeApproximately(0.4, 1e-9);
+    }
+
+    /// <summary>World-echo remaining life is 1 at birth and tracks TTL linearly to 0.</summary>
+    [Fact]
+    public void MessageEcho_RemainingLifeTracksTtl()
+    {
+        var w = CreateWorld();
+        var sender = new Agent { Position = new Vec2(50, 50), SensorRange = 40, AgentType = "OrbitingCoop" };
+        w.Add(sender);
+        w.Transmit(sender, "contact", ttl: 10);
+
+        w.Messages.Should().HaveCount(1);
+        w.Messages[0].RemainingLife.Should().BeApproximately(1.0, 1e-9);
+
+        for (int i = 0; i < 5; i++)
+            w.Tick();
+
+        w.Messages.Should().HaveCount(1);
+        w.Messages[0].Ttl.Should().Be(5);
+        w.Messages[0].RemainingLife.Should().BeApproximately(0.5, 1e-9);
     }
 }

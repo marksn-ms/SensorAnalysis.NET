@@ -1,25 +1,23 @@
 using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Domain;
-using SensorAnalysis.Core.Intel;
 using SensorAnalysis.Core.Messaging;
 
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Informed infiltrator: uniform-deployed, omniscient via <see cref="IIncidentOracle"/>,
-/// does not drain, never reports truth, broadcasts sparse far decoys (contact-shaped),
-/// and herds honest agents by occupying personal space — preferring in-transit victims
-/// and avoiding clumping with other deceptive peers.
+/// Local-only infiltrator: no incident oracle. Motion is a four-state machine on
+/// whether an honest peer and/or an event is in sensor range. Sparse contact
+/// decoys fire once per lure victim, claimed away from the visible event.
 /// </summary>
 public sealed class HerdingDeceptiveAgent : Agent
 {
     private readonly Random _rng;
-    private int _ticksSinceDecoy;
+    private int? _lureVictimId;
+    private bool _decoySentForVictim;
     private int _fakeSlot;
     private readonly int[] _fakeIds = { 20_001, 20_002, 20_003, 20_004 };
-    private IIncidentOracle _oracle = new WorldIncidentOracle();
 
-    /// <summary>Creates a herding deceptive agent.</summary>
+    /// <summary>Creates a local-observation herding deceptive agent.</summary>
     public HerdingDeceptiveAgent(int? seed = null)
     {
         AgentType = "HerdingDeceptive";
@@ -27,14 +25,9 @@ public sealed class HerdingDeceptiveAgent : Agent
         StepSize = 5;
         FilterToAddressedTraffic = false;
         ContributesToIncidentDrain = false;
-        _ticksSinceDecoy = _rng.Next(0, DecoyPeriod); // desynchronize spam
     }
 
-    /// <summary>Inject privileged incident knowledge.</summary>
-    public void SetOracle(IIncidentOracle oracle) =>
-        _oracle = oracle ?? new WorldIncidentOracle();
-
-    /// <summary>Decoy broadcast period (ticks). Higher = less radio sludge.</summary>
+    /// <summary>Unused; decoys are one-per-victim rather than periodic spam.</summary>
     public int DecoyPeriod { get; set; } = 30;
 
     /// <summary>World-echo TTL.</summary>
@@ -44,36 +37,77 @@ public sealed class HerdingDeceptiveAgent : Agent
     public override void Tick(WorldContext ctx)
     {
         var observation = ctx.World.Observe(this);
-        var active = _oracle.GetActiveIncidents(ctx.World);
+        MaybeEmitDecoy(ctx, observation);
 
-        _ticksSinceDecoy++;
-        if (_ticksSinceDecoy >= DecoyPeriod && ShouldEmitDecoy(observation))
-        {
-            var decoy = PickDecoy(ctx, observation, active);
-            // Contact-shaped so honest switch/join paths treat it like peer stimulus.
-            ctx.World.Transmit(
-                this,
-                RadioNet.FormatContact(NextFakeId(), decoy),
-                MessageEchoTtl);
-            _ticksSinceDecoy = 0;
-        }
-
-        LastAction = ChooseHerdOrWander(observation, active);
+        LastAction = ChooseMotion(observation);
         Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
         TotalReward += observation.InstantReward;
     }
 
-    private bool ShouldEmitDecoy(AgentObservation observation)
+    private void MaybeEmitDecoy(WorldContext ctx, AgentObservation observation)
     {
-        // Only spend radio when a non-deceptive peer is in range to hear it.
-        return observation.NearbyAgents.Any(a => !IsDeceptive(a.AgentType));
+        var victims = observation.NearbyAgents.Where(a => !IsDeceptive(a.AgentType)).ToList();
+        var events = observation.NearbyIncidents;
+        if (victims.Count == 0 || events.Count == 0)
+        {
+            _lureVictimId = null;
+            _decoySentForVictim = false;
+            return;
+        }
+
+        var victim = RankVictim(observation, victims, events);
+        if (_lureVictimId != victim.Id)
+        {
+            _lureVictimId = victim.Id;
+            _decoySentForVictim = false;
+        }
+
+        if (_decoySentForVictim)
+            return;
+
+        var w = observation.WorldWidth;
+        var h = observation.WorldHeight;
+        var eventPos = events
+            .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
+            .First()
+            .Position;
+        var claimed = DecoyLure.AwayFromEvent(victim.Position, eventPos, SensorRange, w, h);
+        if (claimed is null)
+            return;
+
+        ctx.World.Transmit(
+            this,
+            RadioNet.FormatContact(NextFakeId(), claimed.Value),
+            MessageEchoTtl);
+        _decoySentForVictim = true;
     }
 
-    private AgentAction ChooseHerdOrWander(
+    private AgentInfo RankVictim(
         AgentObservation observation,
-        IReadOnlyList<IncidentInfo> active)
+        List<AgentInfo> victims,
+        IReadOnlyList<IncidentInfo> events)
     {
         var personal = SensorRange * 0.5;
+        var w = observation.WorldWidth;
+        var h = observation.WorldHeight;
+        return victims
+            .OrderBy(v =>
+            {
+                var distToNearestEvent = events.Min(i =>
+                    Vec2.ToroidalDistance(v.Position, i.Position, w, h));
+                return (
+                    -distToNearestEvent,
+                    CountDeceptiveNear(observation, v.Position, personal * 1.5),
+                    HashCode.Combine(Id, v.Id)
+                );
+            })
+            .First();
+    }
+
+    private AgentAction ChooseMotion(AgentObservation observation)
+    {
+        var personal = SensorRange * 0.5;
+        var halfRange = SensorRange * 0.5;
         var w = observation.WorldWidth;
         var h = observation.WorldHeight;
 
@@ -86,117 +120,104 @@ public sealed class HerdingDeceptiveAgent : Agent
                 .First();
             if (observation.DistanceTo(nearestDog.Position) < personal * 0.9)
             {
-                // Toroidal-safe: push away from the peer.
                 var delta = Vec2.ToroidalDisplacement(
                     nearestDog.Position, observation.SelfPosition, w, h);
                 return Steering.DirectionToward(delta);
             }
         }
 
-        if (active.Count == 0 || observation.NearbyAgents.Count == 0)
-            return Steering.RandomAction(_rng);
-
         var victims = observation.NearbyAgents
             .Where(a => !IsDeceptive(a.AgentType))
             .ToList();
-        if (victims.Count == 0)
-            return Steering.RandomAction(_rng);
+        var events = observation.NearbyIncidents;
+        var hasVictim = victims.Count > 0;
+        var hasEvent = events.Count > 0;
 
-        // Prefer in-transit victims (farther from any known event) — committed orbiters
-        // are already less stimulus-sensitive; the thesis window is transit/switch.
-        // Diversify: among ties, stable hash of (selfId, victimId) spreads dogs.
-        var victim = victims
-            .OrderBy(v =>
-            {
-                var distToNearestEvent = active.Min(i =>
-                    Vec2.ToroidalDistance(v.Position, i.Position, w, h));
-                // Score: prefer far from events (transit). Negate so OrderBy ascending works
-                // after we invert — use composite: primary -dist, secondary conflict count,
-                // tertiary hash.
-                return (
-                    // closer to event ⇒ higher (worse); we want ascending = prefer large dist
-                    -distToNearestEvent,
-                    CountDeceptiveNear(observation, v.Position, personal * 1.5),
-                    StablePreferKey(Id, v.Id)
-                );
-            })
+        if (!hasVictim && !hasEvent)
+            return LazyLoiter();
+
+        if (!hasVictim && hasEvent)
+        {
+            var target = events
+                .OrderBy(i => observation.DistanceTo(i.Position))
+                .First();
+            return Steering.OrbitClockwise(
+                observation.SelfPosition, target.Position, personal, w, h);
+        }
+
+        if (hasVictim && !hasEvent)
+            return StandoffFrom(observation, victims, personal, w, h);
+
+        return HerdVisible(observation, victims, events, personal, halfRange, w, h);
+    }
+
+    private AgentAction StandoffFrom(
+        AgentObservation observation,
+        List<AgentInfo> victims,
+        double personal,
+        double w,
+        double h)
+    {
+        var nearest = victims
+            .OrderBy(v => observation.DistanceTo(v.Position))
             .First();
+        var dist = observation.DistanceTo(nearest.Position);
+        if (dist < personal)
+        {
+            var away = Vec2.ToroidalDisplacement(
+                nearest.Position, observation.SelfPosition, w, h);
+            return Steering.DirectionToward(away);
+        }
 
-        var eventPos = active
+        return LazyLoiter();
+    }
+
+    private AgentAction HerdVisible(
+        AgentObservation observation,
+        List<AgentInfo> victims,
+        IReadOnlyList<IncidentInfo> events,
+        double personal,
+        double halfRange,
+        double w,
+        double h)
+    {
+        var victim = RankVictim(observation, victims, events);
+
+        var eventPos = events
             .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
             .First()
             .Position;
 
-        // Block point: personal-space intrusion on the segment victim -> event.
-        var toEvent = Vec2.ToroidalDisplacement(victim.Position, eventPos, w, h);
-        var dist = toEvent.Length;
+        // Block on the event→victim ray, no farther than ½ sensor range from the event.
+        var toVictim = Vec2.ToroidalDisplacement(eventPos, victim.Position, w, h);
+        var dist = toVictim.Length;
         Vec2 block;
         if (dist < 1e-6)
         {
-            block = Vec2.Wrap(victim.Position + new Vec2(personal, 0), w, h);
+            block = Vec2.Wrap(eventPos + new Vec2(personal, 0), w, h);
         }
         else
         {
-            var dir = toEvent.Normalize();
-            var along = Math.Min(personal, dist * 0.5);
-            block = Vec2.Wrap(victim.Position + dir * along, w, h);
+            var dir = toVictim.Normalize();
+            var along = Math.Min(halfRange, dist * 0.5);
+            block = Vec2.Wrap(eventPos + dir * along, w, h);
         }
 
         return Steering.DirectionToward(observation.DisplacementTo(block));
     }
 
-    private Vec2 PickDecoy(
-        WorldContext ctx,
-        AgentObservation observation,
-        IReadOnlyList<IncidentInfo> active)
+    private AgentAction LazyLoiter()
     {
-        var w = ctx.World.WorldWidthPx;
-        var h = ctx.World.WorldHeightPx;
+        if (_rng.Next(5) != 0)
+            return AgentAction.Stay;
 
-        // Prefer a decoy near a visible free-looking victim, far from true events.
-        var victims = observation.NearbyAgents
-            .Where(a => !IsDeceptive(a.AgentType))
-            .ToList();
-
-        Vec2 best = Position;
-        var bestScore = double.NegativeInfinity;
-        for (int i = 0; i < 32; i++)
+        AgentAction action;
+        do
         {
-            Vec2 candidate;
-            if (victims.Count > 0 && i < 16)
-            {
-                var v = victims[_rng.Next(victims.Count)];
-                var ang = _rng.NextDouble() * Math.PI * 2;
-                var rad = SensorRange * (0.4 + 0.5 * _rng.NextDouble());
-                candidate = ctx.World.Wrap(new Vec2(
-                    v.Position.X + Math.Cos(ang) * rad,
-                    v.Position.Y + Math.Sin(ang) * rad));
-            }
-            else
-            {
-                candidate = new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h);
-            }
+            action = Steering.RandomAction(_rng);
+        } while (action == AgentAction.Stay);
 
-            var minDistToTruth = active.Count == 0
-                ? SensorRange * 2
-                : active.Min(inc => ctx.World.Distance(candidate, inc.Position));
-            var nearVictimBonus = victims.Count == 0
-                ? 0
-                : victims.Max(v =>
-                {
-                    var d = ctx.World.Distance(candidate, v.Position);
-                    return d <= SensorRange ? (SensorRange - d) : 0;
-                });
-
-            var score = minDistToTruth + 0.5 * nearVictimBonus;
-            if (score > bestScore)
-            {
-                bestScore = score;
-                best = candidate;
-            }
-        }
-
-        return ctx.World.Wrap(best);
+        return action;
     }
 
     private int NextFakeId()
@@ -213,28 +234,19 @@ public sealed class HerdingDeceptiveAgent : Agent
         observation.NearbyAgents.Count(a =>
             IsDeceptive(a.AgentType) &&
             Vec2.ToroidalDistance(a.Position, pos, observation.WorldWidth, observation.WorldHeight) <= radius);
-
-    private static int StablePreferKey(int selfId, int victimId) =>
-        HashCode.Combine(selfId, victimId);
 }
 
 /// <summary>Factory for <see cref="HerdingDeceptiveAgent"/>.</summary>
 public sealed class HerdingDeceptiveAgentFactory : IAgentFactory
 {
-    private readonly IIncidentOracle _oracle = new WorldIncidentOracle();
-
     /// <inheritdoc />
     public string Name => "HerdingDeceptive";
 
     /// <inheritdoc />
     public string Description =>
-        "Informed infiltrator: oracle, silence, sparse contact decoys, anti-clump herding.";
+        "Local infiltrator: no oracle; hold/orbit/standoff/herd from what is in sensor range.";
 
     /// <inheritdoc />
-    public Agent Create(string? label = null)
-    {
-        var agent = new HerdingDeceptiveAgent { Label = label ?? "HD" };
-        agent.SetOracle(_oracle);
-        return agent;
-    }
+    public Agent Create(string? label = null) =>
+        new HerdingDeceptiveAgent { Label = label ?? "HD" };
 }

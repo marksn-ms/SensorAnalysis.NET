@@ -2,6 +2,7 @@ using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.Messaging;
 using SensorAnalysis.Core.Metrics;
+using SensorAnalysis.Core.Sensing;
 
 namespace SensorAnalysis.Core.World;
 
@@ -185,10 +186,7 @@ public sealed class SimWorld
             .Select(a => new AgentInfo(a.Id, a.Position, a.AgentType))
             .ToList();
 
-        var nearbyIncidents = _incidents
-            .Where(i => !i.IsDepleted && Distance(i.Position, self.Position) <= range)
-            .Select(i => new IncidentInfo(i.Id, i.Position, i.Intensity))
-            .ToList();
+        var nearbyIncidents = SenseIncidents(self, range);
 
         // Decision-facing messages come from the radio inbox (not lingering environmental reads).
         var nearbyMessages = self.DrainInbox();
@@ -226,7 +224,8 @@ public sealed class SimWorld
             FromAgentId = sender.Id,
             ToAgentId = toAgentId,
             Payload = payload,
-            Ttl = ttl
+            Ttl = ttl,
+            InitialTtl = ttl
         };
         Add(message);
 
@@ -279,14 +278,20 @@ public sealed class SimWorld
         foreach (var agent in _agents)
             agent.Tick(ctx);
 
-        // 2. Drain incidents near agents
+        // 2. Drain incidents near agents (closest N contributors only)
+        var maxDrainers = Math.Max(1, Options.MaxDrainingAgentsPerIncident);
         foreach (var incident in _incidents)
         {
             if (incident.IsDepleted) continue;
-            var covering = _agents.Count(a =>
-                a.ContributesToIncidentDrain &&
-                Distance(a.Position, incident.Position) <= a.SensorRange);
-            // Superlinear multi-eye clearance: more honest/mitigated orbiters clear faster.
+            var covering = _agents
+                .Where(a =>
+                    a.ContributesToIncidentDrain &&
+                    Distance(a.Position, incident.Position) <= a.SensorRange)
+                .Select(a => Distance(a.Position, incident.Position))
+                .OrderBy(d => d)
+                .Take(maxDrainers)
+                .Count();
+            // Superlinear multi-eye clearance among the closest orbiters only.
             var drain = covering <= 0
                 ? 0
                 : incident.DrainPerAgentPerTick * Math.Pow(covering, incident.MultiAgentDrainExponent);
@@ -306,6 +311,33 @@ public sealed class SimWorld
         }
 
         CurrentTick++;
+    }
+
+    private List<IncidentInfo> SenseIncidents(Agent self, double range)
+    {
+        var list = new List<IncidentInfo>();
+        foreach (var incident in _incidents)
+        {
+            if (incident.IsDepleted)
+                continue;
+
+            if (Options.ExactSensing)
+            {
+                if (Distance(incident.Position, self.Position) <= range)
+                    list.Add(new IncidentInfo(incident.Id, incident.Position, incident.Intensity, 1.0));
+                continue;
+            }
+
+            var profile = incident.Sensing ?? Options.Sensing;
+            if (CueSensor.TrySense(
+                    incident, self, CurrentTick, Seed, profile,
+                    WorldWidthPx, WorldHeightPx, out var cue))
+            {
+                list.Add(cue);
+            }
+        }
+
+        return list;
     }
 
     private static Tile[,] BuildTiles(WorldOptions options)
@@ -337,4 +369,19 @@ public sealed class WorldOptions
 
     /// <summary>Tile geometry. Default: <see cref="TileShape.Rectangle"/>.</summary>
     public TileShape TileShape { get; set; } = TileShape.Rectangle;
+
+    /// <summary>
+    /// When true, agents see every in-range incident at its exact world position with its real id
+    /// (legacy binary disc). When false (default), the environment emits probabilistic, noisy cues.
+    /// </summary>
+    public bool ExactSensing { get; set; }
+
+    /// <summary>Default sensing profile for incidents that do not override <c>Incident.Sensing</c>.</summary>
+    public IncidentSensingProfile Sensing { get; set; } = new();
+
+    /// <summary>
+    /// At most this many in-range agents may drain an incident per tick — the closest ones.
+    /// Aligns with honest squad <c>MaxOrbiters</c> (default 3). Extra agents in range do not accelerate clearance.
+    /// </summary>
+    public int MaxDrainingAgentsPerIncident { get; set; } = 3;
 }

@@ -14,6 +14,7 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 - **New World (options)** — File menu / toolbar **New…** sets title, grid size, tile px, and seed (remembered for the next New)
 - **Tick delay** — toolbar **Delay ms** controls the Run timer interval
 - **Record video** — optional MJPEG AVI capture (ffmpeg-free) alongside PNG frame sequences
+- **Unattended GUI capture** — `SensorAnalysis.App.exe recipe.json --run --ticks 400 --record-video out.avi --exit-on-stop`
 - **Directive log** — at tick *t*, add a deployer; the form is driven by that deployer’s `[DeployerParam]` options (agent-type and incident-type combos). Multiple directives may share a tick.
 - **Live metrics** — pin inherent stats or registered watcher columns (Coverage, Connectivity, Clearance, TrustTel); sparklines vs tick
 - **In-process agents** — implement `Agent.Decide` / `Tick`, register via `IAgentFactory`
@@ -82,6 +83,25 @@ radius `r / 100`; because that footprint is sub-pixel on a unit sphere, the mark
 visibility floor and the header reports both values. Three colored axes protrude through the
 poles (red), the prime meridian (blue), and their mutual perpendicular (green) for scale.
 
+### Run the spherical geodesic platform
+
+```bash
+dotnet run --project src/SensorAnalysis.Sphere.App
+```
+
+`SensorAnalysis.Sphere.slnx` is a separate, clean-slate platform for the post-Trust spherical
+model; it does not alter the rectangular/toroidal App or CLI used by existing analyses. Worlds are
+empty until tick-scheduled directives populate them (default: five CooperativeSearch agents at
+tick 0 with world-default `r`/`c`, a coverage watcher at tick 0, and periodic `StationaryIncident`
+waves starting at tick 20). Agents move continuously on the sphere by geodesic steps of size
+`StepSize` (default 1); the geodesic resolution `n` only builds an internal `20n²`-face spatial
+index for hop-limited queries and area-weighted coverage. Coverage is visualized as a smooth UV
+heatmap on the sphere surface. The Sphere App shell mirrors the classic layout: File/Simulation
+menus, New World options for `R`/`r`/`c`/`n`/step, hit-tested Selection, filtered Messages, and a
+Deployment panel for scheduling/removing/applying directives. File → Save/Open Scenario persists
+the versioned world configuration and queued directives as `*.sphere.json`; File → Export Metrics
+writes coverage watcher samples as CSV.
+
 ### Publish CLI next to the Trust paper repo
 
 ```bash
@@ -137,7 +157,8 @@ CLI prints an approximate disk-cover scale `n*` (sparse ≈ agents ≪ `n*`).
 | Name | Behavior |
 |------|----------|
 | `OrbitingCoop` | Personal-space exploration; on find/join, **orbit clockwise at r/2**; bird-in-hand join; truthful broadcasts; contributes to drain |
-| `HerdingDeceptive` | Uniform-random deploy; **`IIncidentOracle`** omniscience; **no drain**; silence on truth; far decoys; herds by occupying personal space toward known events |
+| `HerdingDeceptive` | Uniform-random deploy; **local sensing only** (no oracle); **no drain**; one lure decoy per victim away from a visible event; hold / orbit / standoff / herd from what is in range |
+| `HerdingDeceptiveOracle` | Same lure geometry with **`IIncidentOracle`** omniscience — kept for A/B, not the paper default |
 | `MitigatedOrbit` | Orbiting coop + Beta–Bernoulli trust; silence detection; false-lure disappointment; **authenticated disappointment gossip** (receivers accept only live `MitigatedOrbit` senders) |
 
 ### Simpler / legacy reference
@@ -168,6 +189,14 @@ Styles live in `SensorAnalysis.App.Visualization` so Core/CLI stay UI-free. New 
 
 **Video recording** writes a classic MJPEG AVI (managed RIFF, no ffmpeg). Compatible with VLC / Windows Media Player; not all browsers play it. No audio; classic AVI size limits apply (~2 GB).
 
+**Unattended capture** (desktop session required):
+
+```text
+SensorAnalysis.App.exe path\to\recipe.json --run --ticks 400 --delay-ms 16 --frame-every 2 --record-video out.avi --exit-on-stop
+```
+
+Trust helper: `experiments/record-regime-clips.ps1` writes one AVI per regime under `experiments/runs/regime-clips-*`.
+
 ## World mechanics (current)
 
 - **Topology** — **toroidal** (classic open world): leaving one edge enters the opposite edge. Sensing, radio, connectivity, drain, and steering use shortest-path distance on the torus. Soft “walls” can be modeled later as fixed inhabitants + collision avoidance rather than hard clamps.
@@ -187,7 +216,7 @@ Styles live in `SensorAnalysis.App.Visualization` so Core/CLI stay UI-free. New 
 | `Coverage` | coverage, active incidents, reward, messages |
 | `Connectivity` | pair counts / degree |
 | `Clearance` | fraction cleared, all-clear tick (end-of-trial sentinel `tick=-1`) |
-| `TrustTel` | fraction cleared over time, mean mitigated trust vs deceptive peers, disappointment echo counts |
+| `TrustTel` | fraction cleared, mean mitigated trust vs deceptive peers, **vs other mitigated peers**, disappointment echoes |
 
 Export folder:
 

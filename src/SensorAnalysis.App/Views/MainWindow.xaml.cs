@@ -12,6 +12,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         var vm = new MainViewModel();
         DataContext = vm;
-        Loaded += (_, _) => vm.Canvas = WorldView;
+        Loaded += (_, _) =>
+        {
+            vm.Canvas = WorldView;
+            vm.TryLoadStartupRecipe();
+        };
     }
 }
