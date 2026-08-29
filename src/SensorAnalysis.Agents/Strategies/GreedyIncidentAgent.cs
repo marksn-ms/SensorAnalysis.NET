@@ -9,25 +9,19 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class GreedyIncidentAgent : Agent
 {
-    private readonly Random _rng;
-
-    /// <summary>
-    /// Creates a greedy incident-seeking agent.
-    /// </summary>
-    /// <param name="seed">Optional RNG seed for deterministic wandering; otherwise non-deterministic.</param>
-    public GreedyIncidentAgent(int? seed = null)
+    /// <summary>Creates a greedy incident-seeking agent.</summary>
+    public GreedyIncidentAgent()
     {
         AgentType = "GreedyIncident";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
     }
 
-    /// <inheritdoc />
+    /// <summary>Steers toward the nearest visible incident, otherwise picks a random direction.</summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         if (observation.NearbyIncidents.Count == 0)
         {
             var values = Enum.GetValues<AgentAction>();
-            return values[_rng.Next(values.Length)];
+            return values[Rng.Next(values.Length)];
         }
 
         var nearest = observation.NearbyIncidents
@@ -59,7 +53,7 @@ public sealed class GreedyIncidentAgent : Agent
     }
 }
 
-/// <summary>Factory for <see cref="GreedyIncidentAgent"/> instances.</summary>
+/// <summary>Factory for <see cref="GreedyIncidentAgent"/>.</summary>
 public sealed class GreedyIncidentAgentFactory : IAgentFactory
 {
     /// <inheritdoc />

@@ -11,36 +11,31 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class HerdingDeceptiveAgent : Agent
 {
-    private readonly Random _rng;
     private int? _lureVictimId;
     private bool _decoySentForVictim;
     private int _fakeSlot;
     private readonly int[] _fakeIds = { 20_001, 20_002, 20_003, 20_004 };
 
     /// <summary>Creates a local-observation herding deceptive agent.</summary>
-    public HerdingDeceptiveAgent(int? seed = null)
+    public HerdingDeceptiveAgent()
     {
         AgentType = "HerdingDeceptive";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = false;
+        Velocity = 5;
         ContributesToIncidentDrain = false;
+        MessageEchoTtl = 40;
     }
 
-    /// <summary>Unused; decoys are one-per-victim rather than periodic spam.</summary>
-    public int DecoyPeriod { get; set; } = 30;
-
-    /// <summary>World-echo TTL.</summary>
-    public int MessageEchoTtl { get; set; } = 40;
-
-    /// <inheritdoc />
+    /// <summary>
+    /// Emits at most one lure decoy per victim, then moves via the four-state herding motion machine.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
         MaybeEmitDecoy(ctx, observation);
 
         LastAction = ChooseMotion(observation);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 
@@ -65,19 +60,17 @@ public sealed class HerdingDeceptiveAgent : Agent
         if (_decoySentForVictim)
             return;
 
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
         var eventPos = events
-            .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
+            .OrderBy(i => observation.DistanceBetween(victim.Position, i.Position))
             .First()
             .Position;
-        var claimed = DecoyLure.AwayFromEvent(victim.Position, eventPos, SensorRange, w, h);
+        var claimed = DecoyLure.AwayFromEvent(victim.Position, eventPos, SensorRange, observation);
         if (claimed is null)
             return;
 
         ctx.World.Transmit(
             this,
-            RadioNet.FormatContact(NextFakeId(), claimed.Value),
+            RadioNet.FormatContact(NextFakeId(), observation.AbsoluteFromRelative(claimed.Value)),
             MessageEchoTtl);
         _decoySentForVictim = true;
     }
@@ -88,13 +81,11 @@ public sealed class HerdingDeceptiveAgent : Agent
         IReadOnlyList<IncidentInfo> events)
     {
         var personal = SensorRange * 0.5;
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
         return victims
             .OrderBy(v =>
             {
                 var distToNearestEvent = events.Min(i =>
-                    Vec2.ToroidalDistance(v.Position, i.Position, w, h));
+                    observation.DistanceBetween(v.Position, i.Position));
                 return (
                     -distToNearestEvent,
                     CountDeceptiveNear(observation, v.Position, personal * 1.5),
@@ -108,8 +99,6 @@ public sealed class HerdingDeceptiveAgent : Agent
     {
         var personal = SensorRange * 0.5;
         var halfRange = SensorRange * 0.5;
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
 
         // Mild repulsion from other deceptive agents to prevent hip-lock clumping.
         var deceptivePeers = observation.NearbyAgents.Where(a => IsDeceptive(a.AgentType)).ToList();
@@ -120,8 +109,7 @@ public sealed class HerdingDeceptiveAgent : Agent
                 .First();
             if (observation.DistanceTo(nearestDog.Position) < personal * 0.9)
             {
-                var delta = Vec2.ToroidalDisplacement(
-                    nearestDog.Position, observation.SelfPosition, w, h);
+                var delta = observation.DisplacementBetween(nearestDog.Position, Vec2.Zero);
                 return Steering.DirectionToward(delta);
             }
         }
@@ -141,22 +129,19 @@ public sealed class HerdingDeceptiveAgent : Agent
             var target = events
                 .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
-            return Steering.OrbitClockwise(
-                observation.SelfPosition, target.Position, personal, w, h);
+            return Steering.OrbitClockwise(target.Position, personal, observation);
         }
 
         if (hasVictim && !hasEvent)
-            return StandoffFrom(observation, victims, personal, w, h);
+            return StandoffFrom(observation, victims, personal);
 
-        return HerdVisible(observation, victims, events, personal, halfRange, w, h);
+        return HerdVisible(observation, victims, events, personal, halfRange);
     }
 
     private AgentAction StandoffFrom(
         AgentObservation observation,
         List<AgentInfo> victims,
-        double personal,
-        double w,
-        double h)
+        double personal)
     {
         var nearest = victims
             .OrderBy(v => observation.DistanceTo(v.Position))
@@ -164,8 +149,7 @@ public sealed class HerdingDeceptiveAgent : Agent
         var dist = observation.DistanceTo(nearest.Position);
         if (dist < personal)
         {
-            var away = Vec2.ToroidalDisplacement(
-                nearest.Position, observation.SelfPosition, w, h);
+            var away = observation.DisplacementBetween(nearest.Position, Vec2.Zero);
             return Steering.DirectionToward(away);
         }
 
@@ -177,30 +161,29 @@ public sealed class HerdingDeceptiveAgent : Agent
         List<AgentInfo> victims,
         IReadOnlyList<IncidentInfo> events,
         double personal,
-        double halfRange,
-        double w,
-        double h)
+        double halfRange)
     {
         var victim = RankVictim(observation, victims, events);
 
         var eventPos = events
-            .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
+            .OrderBy(i => observation.DistanceBetween(victim.Position, i.Position))
             .First()
             .Position;
 
         // Block on the event→victim ray, no farther than ½ sensor range from the event.
-        var toVictim = Vec2.ToroidalDisplacement(eventPos, victim.Position, w, h);
+        var toVictim = observation.DisplacementBetween(eventPos, victim.Position);
         var dist = toVictim.Length;
         Vec2 block;
         if (dist < 1e-6)
         {
-            block = Vec2.Wrap(eventPos + new Vec2(personal, 0), w, h);
+            block = eventPos + new Vec2(personal, 0);
         }
         else
         {
             var dir = toVictim.Normalize();
             var along = Math.Min(halfRange, dist * 0.5);
-            block = Vec2.Wrap(eventPos + dir * along, w, h);
+            var eventAbs = observation.AbsoluteFromRelative(eventPos);
+            block = observation.RelativeFromAbsolute(eventAbs + dir * along);
         }
 
         return Steering.DirectionToward(observation.DisplacementTo(block));
@@ -208,13 +191,13 @@ public sealed class HerdingDeceptiveAgent : Agent
 
     private AgentAction LazyLoiter()
     {
-        if (_rng.Next(5) != 0)
+        if (Rng.Next(5) != 0)
             return AgentAction.Stay;
 
         AgentAction action;
         do
         {
-            action = Steering.RandomAction(_rng);
+            action = Steering.RandomAction(Rng);
         } while (action == AgentAction.Stay);
 
         return action;
@@ -233,7 +216,7 @@ public sealed class HerdingDeceptiveAgent : Agent
     private static int CountDeceptiveNear(AgentObservation observation, Vec2 pos, double radius) =>
         observation.NearbyAgents.Count(a =>
             IsDeceptive(a.AgentType) &&
-            Vec2.ToroidalDistance(a.Position, pos, observation.WorldWidth, observation.WorldHeight) <= radius);
+            observation.DistanceBetween(a.Position, pos) <= radius);
 }
 
 /// <summary>Factory for <see cref="HerdingDeceptiveAgent"/>.</summary>

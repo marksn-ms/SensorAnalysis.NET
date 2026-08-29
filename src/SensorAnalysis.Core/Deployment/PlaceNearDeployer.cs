@@ -6,13 +6,13 @@ namespace SensorAnalysis.Core.Deployment;
 /// <summary>Options for <see cref="PlaceNearDeployer"/>.</summary>
 public sealed class PlaceNearOptions
 {
-    /// <summary>Incidents per wave (or once when <see cref="PeriodTicks"/> is 0).</summary>
+    /// <summary>Objects per wave (or once when <see cref="PeriodTicks"/> is 0).</summary>
     [DeployerParam("Count")]
     public int Count { get; set; } = 1;
 
-    /// <summary>Host agent type to place near (must already be in the world).</summary>
-    [DeployerParam("Near agent type", IsAgentType = true,
-        Description = "Incidents land near living agents of this type.")]
+    /// <summary>Host type to place near (must already be in the world).</summary>
+    [DeployerParam("Near type", IsDeployableType = true,
+        Description = "Objects land near living hosts of this type.")]
     public string NearTypeName { get; set; } = "HerdingDeceptive";
 
     /// <summary>
@@ -30,9 +30,9 @@ public sealed class PlaceNearOptions
         Description = "0 = one-shot; otherwise periodic waves.")]
     public int PeriodTicks { get; set; }
 
-    /// <summary>Logical incident kind for styling / filtering (default <c>Incident</c>).</summary>
-    [DeployerParam("Incident type", IsIncidentType = true, Required = false)]
-    public string IncidentType { get; set; } = "Incident";
+    /// <summary>Deployable type name for spawned objects.</summary>
+    [DeployerParam("Type", IsDeployableType = true)]
+    public string TypeName { get; set; } = "Incident";
 
     /// <summary>
     /// When true, shuffle hosts once per trial and cycle through them (preferring
@@ -45,15 +45,13 @@ public sealed class PlaceNearOptions
 }
 
 /// <summary>
-/// Places incidents near living agents of a chosen type at a configurable fraction of their sensor range.
-/// One-shot when <see cref="PlaceNearOptions.PeriodTicks"/> is 0; otherwise periodic.
-/// Register after the host agents have been deployed (same tick is fine if this step runs later in the list).
+/// Places objects near living hosts of a chosen type at a configurable fraction of their sensor range.
 /// </summary>
 public sealed class PlaceNearDeployer : IDeployer
 {
     private SimWorld? _world;
     private PlaceNearOptions? _options;
-    private int _randomSalt;
+    private DeployContext? _context;
     private int _waveIndex;
     private bool _dormant = true;
     private int[]? _hostOrder;
@@ -64,7 +62,7 @@ public sealed class PlaceNearDeployer : IDeployer
 
     /// <inheritdoc />
     public string Description =>
-        "Incidents near a host agent type at RangeFactor × sensor range (one-shot or periodic).";
+        "Objects near a host type at RangeFactor × sensor range (one-shot or periodic).";
 
     /// <inheritdoc />
     public bool IsDormant => _dormant;
@@ -80,7 +78,7 @@ public sealed class PlaceNearDeployer : IDeployer
     {
         _options = (PlaceNearOptions)options;
         _world = world;
-        _randomSalt = context.RandomSalt;
+        _context = context;
         _waveIndex = 0;
         _hostOrder = null;
         _hostCursor = 0;
@@ -89,7 +87,7 @@ public sealed class PlaceNearDeployer : IDeployer
 
         if (_options.PeriodTicks <= 0)
         {
-            SpawnWave(world, context.RandomSalt, waveIndex: 0);
+            SpawnWave(world, waveIndex: 0);
             _dormant = true;
         }
         else
@@ -105,26 +103,29 @@ public sealed class PlaceNearDeployer : IDeployer
         if (ctx.World != _world) return;
         if (ctx.Tick % _options.PeriodTicks != 0) return;
 
-        SpawnWave(_world, unchecked(_randomSalt ^ (int)ctx.Tick * 7919), _waveIndex);
+        SpawnWave(_world, _waveIndex);
         _waveIndex++;
     }
 
-    private void SpawnWave(SimWorld world, int salt, int waveIndex)
+    private void SpawnWave(SimWorld world, int waveIndex)
     {
         var o = _options!;
-        var rng = new Random(unchecked(world.Seed ^ salt ^ waveIndex * 104729));
+        var rng = world.Random;
+        var deployableParams = _context!.ParametersFor(o.TypeName);
+
         for (int i = 0; i < o.Count; i++)
         {
             var position = o.RoundRobinHosts
                 ? PlaceRoundRobin(world, rng, o)
                 : IncidentPlacementHelper.PlaceNearType(
                     world, rng, o.NearTypeName, o.RangeFactor);
-            world.Add(new Incident
+
+            _context.Deployables.Deploy(world, o.TypeName, new DeployableSpawnRequest
             {
                 Position = position,
-                Intensity = 1.0,
-                IncidentType = string.IsNullOrWhiteSpace(o.IncidentType) ? "Incident" : o.IncidentType,
-                Label = $"I-near-{waveIndex}-{i}"
+                Label = $"obj-near-{waveIndex}-{i}",
+                Parameters = deployableParams,
+                Rng = rng
             });
         }
     }

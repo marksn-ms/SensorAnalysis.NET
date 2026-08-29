@@ -44,7 +44,7 @@ public sealed class RewardModel
         reward -= ScaleCrowding * excess;
 
         // Coverage bonus: tile not covered before this tick
-        var tile = world.TileAt(obs.SelfPosition);
+        var tile = world.TileAt(self.Position);
         if (tile.LastCoveredTick < 0)
             reward += ScaleCoverageBonus;
 

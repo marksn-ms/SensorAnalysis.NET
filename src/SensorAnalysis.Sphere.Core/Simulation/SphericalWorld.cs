@@ -44,6 +44,7 @@ public sealed record SphericalWorldOptions
     public double CommunicationRange { get; init; } = 100;
 
     /// <summary>Default continuous step distance in world units.</summary>
+    /// <remarks>TODO: rename to <c>Velocity</c> for parity with flat <see cref="SensorAnalysis.Core.Domain.Agent"/>.</remarks>
     public double StepSize { get; init; } = 1;
 
     /// <summary>Intensity removed per helping agent per tick.</summary>
@@ -96,7 +97,26 @@ public sealed class SphericalAgent
     public double CommunicationRange { get; set; }
 
     /// <summary>Continuous step distance in world units.</summary>
+    /// <remarks>TODO: rename to <c>Velocity</c> for parity with flat <see cref="SensorAnalysis.Core.Domain.Agent"/>.</remarks>
     public double StepSize { get; set; }
+
+    /// <summary>Base ticks between periodic actions such as radio relays.</summary>
+    public int ActionIntervalBase { get; set; } = 10;
+
+    /// <summary>Per-instance interval sampled around <see cref="ActionIntervalBase"/>.</summary>
+    public int ActionInterval { get; internal set; }
+
+    /// <summary>TTL for recorded relay messages shown in the UI.</summary>
+    public int MessageEchoTtl { get; set; } = 50;
+
+    /// <summary>Ticks to persist a random-walk heading before resampling.</summary>
+    public int HeadingChangeInterval { get; set; } = 8;
+
+    /// <summary>Ticks since the last relay transmission.</summary>
+    internal int TicksSinceRelay { get; set; }
+
+    /// <summary>Ticks remaining on the current random-walk heading.</summary>
+    internal int HeadingTicksRemaining { get; set; }
 
     /// <summary>Incident positions learned through sensing or radio, keyed by incident id.</summary>
     public Dictionary<int, SphereVector> KnownIncidentPositions { get; } = [];
@@ -140,6 +160,7 @@ public sealed class SphericalWorld
         if (options.Resolution < 1) throw new ArgumentOutOfRangeException(nameof(options));
         Options = options;
         Mesh = GeodesicMesh.Create(options.Resolution);
+        Seed = seed;
         _random = new Random(seed);
         ValidateRange(options.SensorRange, "Sensor range");
         ValidateRange(options.CommunicationRange, "Communication range");
@@ -174,6 +195,12 @@ public sealed class SphericalWorld
 
     /// <summary>Current simulation tick.</summary>
     public long CurrentTick { get; private set; }
+
+    /// <summary>Deterministic random seed used to construct this world.</summary>
+    public int Seed { get; }
+
+    /// <summary>Shared deterministic RNG for the world and everything it hosts.</summary>
+    public Random Random => _random;
 
     /// <summary>Physical characteristic edge length ℓ(n).</summary>
     public double CharacteristicEdgeLength => Options.Radius * Mesh.CharacteristicEdgeRadians;
@@ -211,6 +238,9 @@ public sealed class SphericalWorld
             sensorRange ?? Options.SensorRange,
             communicationRange ?? Options.CommunicationRange,
             stepSize ?? Options.StepSize);
+        agent.ActionInterval = SampleGaussianInterval(agent.ActionIntervalBase);
+        agent.HeadingTicksRemaining = agent.HeadingChangeInterval;
+        agent.TicksSinceRelay = _random.Next(0, Math.Max(1, agent.ActionInterval));
         _agents.Add(agent);
         _faceLastCoveredTick[faceId] = CurrentTick;
         return agent;
@@ -284,8 +314,13 @@ public sealed class SphericalWorld
         {
             if (agent.Kind != SphericalAgentKind.CooperativeSearch) continue;
             foreach (var incident in ActiveIncidentsInRange(agent, agent.SensorRange))
-            {
                 agent.KnownIncidentPositions[incident.Id] = incident.Position;
+
+            agent.TicksSinceRelay++;
+            if (agent.TicksSinceRelay < agent.ActionInterval) continue;
+
+            foreach (var incident in ActiveIncidentsInRange(agent, agent.SensorRange))
+            {
                 foreach (var receiver in AgentsInRange(agent, agent.CommunicationRange))
                 {
                     receiver.KnownIncidentPositions[incident.Id] = incident.Position;
@@ -299,6 +334,8 @@ public sealed class SphericalWorld
                         $"t{CurrentTick}: agent {agent.Id} → {receiver.Id}, incident {incident.Id}"));
                 }
             }
+
+            agent.TicksSinceRelay = 0;
         }
 
         DrainIncidents();
@@ -361,8 +398,16 @@ public sealed class SphericalWorld
 
         if (agent.Kind == SphericalAgentKind.RandomWalk)
         {
-            var turn = (_random.NextDouble() - 0.5) * 0.7;
-            agent.Heading = RotateHeading(agent.Position, agent.Heading, turn);
+            if (agent.HeadingTicksRemaining <= 0)
+            {
+                var turn = (_random.NextDouble() - 0.5) * Math.PI;
+                agent.Heading = RotateHeading(agent.Position, agent.Heading, turn);
+                agent.HeadingTicksRemaining = agent.HeadingChangeInterval;
+            }
+            else
+            {
+                agent.HeadingTicksRemaining--;
+            }
         }
         else
         {
@@ -371,8 +416,16 @@ public sealed class SphericalWorld
                 .ToArray();
             if (targets.Length == 0)
             {
-                var turn = (_random.NextDouble() - 0.5) * 0.7;
-                agent.Heading = RotateHeading(agent.Position, agent.Heading, turn);
+                if (agent.HeadingTicksRemaining <= 0)
+                {
+                    var turn = (_random.NextDouble() - 0.5) * Math.PI;
+                    agent.Heading = RotateHeading(agent.Position, agent.Heading, turn);
+                    agent.HeadingTicksRemaining = agent.HeadingChangeInterval;
+                }
+                else
+                {
+                    agent.HeadingTicksRemaining--;
+                }
             }
             else
             {
@@ -381,6 +434,7 @@ public sealed class SphericalWorld
                     .First();
                 agent.Heading = SphereVector.TangentAt(agent.Position, goal.Position - agent.Position);
                 if (agent.Heading.Length < 1e-9) agent.Heading = RandomTangent(agent.Position);
+                agent.HeadingTicksRemaining = agent.HeadingChangeInterval;
             }
         }
 
@@ -530,6 +584,14 @@ public sealed class SphericalWorld
         var side = SphereVector.Cross(normal, heading).Normalize();
         if (side.Length < 1e-9) return heading;
         return (heading * Math.Cos(radians) + side * Math.Sin(radians)).Normalize();
+    }
+
+    private int SampleGaussianInterval(int baseInterval, double stdDev = 1.5)
+    {
+        var u1 = 1.0 - _random.NextDouble();
+        var u2 = 1.0 - _random.NextDouble();
+        var z = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        return Math.Max(1, (int)Math.Round(baseInterval + z * stdDev));
     }
 }
 

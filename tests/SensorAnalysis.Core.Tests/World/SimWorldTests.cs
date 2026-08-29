@@ -1,4 +1,5 @@
 using FluentAssertions;
+using SensorAnalysis.Agents;
 using SensorAnalysis.Agents.Deployers;
 using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Core.Deployment;
@@ -28,8 +29,8 @@ public class SimWorldTests
 
         void Setup(SimWorld w)
         {
-            w.Add(new RandomWalkAgent(seed: 1) { Position = new Vec2(50, 50), SensorRange = 40 });
-            w.Add(new RandomWalkAgent(seed: 2) { Position = new Vec2(60, 60), SensorRange = 40 });
+            w.Add(new RandomWalkAgent { Position = new Vec2(50, 50), SensorRange = 40 });
+            w.Add(new RandomWalkAgent { Position = new Vec2(60, 60), SensorRange = 40 });
             w.Add(new Incident { Position = new Vec2(55, 55), Intensity = 1 });
         }
 
@@ -99,21 +100,43 @@ public class SimWorldTests
     public void Deployer_PlacesRequestedCounts()
     {
         var w = CreateWorld();
-        var deployer = new RandomDeployer();
-        deployer.Attach(w, new RandomDeployOptions
+        var deployer = new UniformDeployer();
+        deployer.Attach(w, new UniformDeployOptions
         {
             Count = 7,
-            TypeName = "RandomWalk",
-            SensorRange = 50
+            TypeName = "RandomWalk"
         }, new DeployContext
         {
-            ResolveAgent = _ => new RandomWalkAgent()
+            Deployables = BuiltinCatalog.CreateDeployables(),
+            Parameters = new Dictionary<string, object?> { ["SensorRange"] = 50.0 }
         });
-        new UniformIncidentDeployer().Attach(w, new UniformIncidentOptions { Count = 3 },
-            new DeployContext { ResolveAgent = _ => new RandomWalkAgent() });
+        new UniformDeployer().Attach(w, new UniformDeployOptions
+        {
+            Count = 3,
+            TypeName = "Incident"
+        }, new DeployContext { Deployables = BuiltinCatalog.CreateDeployables() });
 
         w.Agents.Should().HaveCount(7);
         w.Incidents.Should().HaveCount(3);
+    }
+
+    /// <summary>Agents added to the same world receive distinct action intervals.</summary>
+    [Fact]
+    public void Add_SamplesDistinctActionIntervals_FromWorldRng()
+    {
+        var w = CreateWorld();
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+        w.Add(new Agent());
+
+        w.Agents.Select(a => a.ActionInterval).Distinct().Count().Should().BeGreaterThan(1);
     }
 
     /// <summary>Verifies incident intensity decreases when an in-range agent ticks.</summary>
@@ -186,5 +209,36 @@ public class SimWorldTests
         w.Messages.Should().HaveCount(1);
         w.Messages[0].Ttl.Should().Be(5);
         w.Messages[0].RemainingLife.Should().BeApproximately(0.5, 1e-9);
+    }
+
+    /// <summary>Broadcast and self-addressed traffic is readable; other addressed traffic is garbled.</summary>
+    [Fact]
+    public void Observe_GarblesTrafficAddressedToOtherAgents()
+    {
+        var w = CreateWorld();
+        var sender = new Agent { Position = new Vec2(50, 50), SensorRange = 40, AgentType = "Sender" };
+        var addressee = new Agent { Position = new Vec2(55, 50), SensorRange = 40, AgentType = "Addressee" };
+        var bystander = new Agent { Position = new Vec2(45, 50), SensorRange = 40, AgentType = "Bystander" };
+        w.Add(sender);
+        w.Add(addressee);
+        w.Add(bystander);
+
+        w.Transmit(sender, "broadcast-payload", ttl: 10);
+        w.Transmit(sender, "private-payload", ttl: 10, toAgentId: addressee.Id);
+
+        var bystanderObs = w.Observe(bystander);
+        bystanderObs.NearbyMessages.Should().HaveCount(2);
+        bystanderObs.NearbyMessages.Should().ContainSingle(m =>
+            m.Payload == "broadcast-payload" && m.FromAgentId == sender.Id);
+
+        var garbled = bystanderObs.NearbyMessages.Single(m => m.Payload == "");
+        garbled.FromAgentId.Should().BeNull();
+        garbled.FromType.Should().BeEmpty();
+        garbled.ToAgentId.Should().BeNull();
+        garbled.TtlRemaining.Should().Be(0);
+
+        var addresseeObs = w.Observe(addressee);
+        addresseeObs.NearbyMessages.Should().Contain(m =>
+            m.Payload == "private-payload" && m.ToAgentId == addressee.Id);
     }
 }

@@ -9,27 +9,23 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public class PersonalSpaceCoopAgent : Agent
 {
-    private readonly Random _rng;
     private AgentAction _exploreHeading = AgentAction.Stay;
     private int _explorePersist;
 
     /// <summary>Creates a personal-space cooperative agent.</summary>
-    public PersonalSpaceCoopAgent(int? seed = null)
+    public PersonalSpaceCoopAgent()
     {
         AgentType = "PersonalSpaceCoop";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = true;
+        Velocity = 5;
         ContributesToIncidentDrain = true;
     }
-
-    /// <summary>Protected RNG for subclasses.</summary>
-    protected Random Rng => _rng;
 
     /// <summary>Personal-space radius used while exploring (default half sensor range).</summary>
     protected double PersonalSpaceRadius => SensorRange * 0.5;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Approaches the nearest sensed incident or explores while yielding personal space to peers.
+    /// </summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         if (observation.NearbyIncidents.Count > 0)
@@ -53,14 +49,14 @@ public class PersonalSpaceCoopAgent : Agent
     /// <summary>Personal-space exploration with the given neighbor set.</summary>
     protected AgentAction Explore(AgentObservation observation, IReadOnlyList<AgentInfo> neighbors) =>
         Steering.ExploreWithPersonalSpace(
-            observation.SelfPosition,
             _exploreHeading,
             _explorePersist,
             neighbors,
             PersonalSpaceRadius,
-            observation.WorldWidth,
-            observation.WorldHeight,
-            _rng,
+            Velocity,
+            observation,
+            Rng,
+            HeadingChangeInterval,
             out _exploreHeading,
             out _explorePersist);
 }

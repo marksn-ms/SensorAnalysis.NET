@@ -1,3 +1,4 @@
+using SensorAnalysis.Agents.Deployables;
 using SensorAnalysis.Agents.Deployers;
 using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Core.Agents;
@@ -25,10 +26,21 @@ public static class BuiltinCatalog
         registry.Register(new HerdingDeceptiveAgentFactory());
         registry.Register(new HerdingDeceptiveOracleAgentFactory());
         registry.Register(new MitigatedOrbitAgentFactory());
-        // First-principles crowding-only family (no radio): Stage-1 thesis isolation.
         registry.Register(new PersonalSpaceCoopAgentFactory());
         registry.Register(new CrowdOnlyDeceptiveAgentFactory());
         registry.Register(new CrowdAwareMitigatedAgentFactory());
+        return registry;
+    }
+
+    /// <summary>Unified deployable registry (agents + incidents + future types).</summary>
+    public static DeployableRegistry CreateDeployables()
+    {
+        var agents = CreateAgents();
+        var registry = new DeployableRegistry();
+        foreach (var name in agents.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            registry.Register(new AgentDeployableFactory(agents.Get(name)));
+
+        registry.Register(new IncidentDeployableFactory());
         return registry;
     }
 
@@ -42,11 +54,15 @@ public static class BuiltinCatalog
             map[sample.Name] = factory;
         }
 
-        Add(() => new RandomDeployer());
+        Add(() => new UniformDeployer());
         Add(() => new GaussianDeployer());
-        Add(() => new UniformIncidentDeployer());
-        Add(() => new PeriodicIncidentDeployer());
+        Add(() => new PeriodicDeployer());
         Add(() => new PlaceNearDeployer());
+
+        map["Random"] = map["Uniform"];
+        map["UniformIncidents"] = map["Uniform"];
+        map["PeriodicIncidents"] = map["Periodic"];
+
         return map;
     }
 }

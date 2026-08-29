@@ -1,5 +1,5 @@
 using FluentAssertions;
-using SensorAnalysis.Agents.Deployers;
+using SensorAnalysis.Agents;
 using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
@@ -9,23 +9,21 @@ using Xunit;
 
 namespace SensorAnalysis.Core.Tests.Metrics;
 
-/// <summary>Tests for <see cref="ExperimentExporter"/> output files.</summary>
 public class ExporterTests
 {
-    /// <summary>Verifies that export writes run-meta.json and a metrics CSV with expected headers.</summary>
     [Fact]
-    public void ExperimentExporter_WritesMetaAndCsv()
+    public void Export_WritesRunMetaAndMetricsCsv()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "sa-test-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), $"sa-export-{Guid.NewGuid():N}");
         try
         {
-            var coverage = new CoverageWatcher(1);
+            var deployables = BuiltinCatalog.CreateDeployables();
+            var coverage = new CoverageWatcher(sampleEveryTicks: 1);
             var runner = new SimulationRunner();
             runner.AddWatcher(coverage);
-
             var manifest = runner.RunExperiment(new ExperimentRequest
             {
-                ExperimentName = "unit-test",
+                ExperimentName = "export-test",
                 BaseSeed = 1,
                 Trials = 2,
                 TicksPerTrial = 10,
@@ -38,24 +36,25 @@ public class ExporterTests
                 [
                     new DeployStep
                     {
-                        CreateDeployer = () => new RandomDeployer(),
-                        Options = new RandomDeployOptions
+                        CreateDeployer = () => new UniformDeployer(),
+                        Options = new UniformDeployOptions
                         {
                             Count = 3,
-                            TypeName = "RandomWalk",
-                            SensorRange = 40
-                        }
+                            TypeName = "RandomWalk"
+                        },
+                        Parameters = new Dictionary<string, object?> { ["SensorRange"] = 40.0 }
                     },
                     new DeployStep
                     {
-                        CreateDeployer = () => new UniformIncidentDeployer(),
-                        Options = new UniformIncidentOptions { Count = 2 }
+                        CreateDeployer = () => new UniformDeployer(),
+                        Options = new UniformDeployOptions
+                        {
+                            Count = 2,
+                            TypeName = "Incident"
+                        }
                     }
                 ],
-                Context = new DeployContext
-                {
-                    ResolveAgent = _ => new RandomWalkAgent()
-                }
+                Context = new DeployContext { Deployables = deployables }
             });
 
             ExperimentExporter.Export(dir, manifest, new[] { coverage });

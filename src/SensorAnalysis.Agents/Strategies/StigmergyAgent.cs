@@ -10,28 +10,20 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class StigmergyAgent : Agent
 {
-    private readonly Random _rng;
     private int _ticksSinceReport;
 
-    /// <summary>
-    /// Creates an agent that transmits and follows incident report messages.
-    /// </summary>
-    /// <param name="seed">Optional RNG seed for deterministic exploration; otherwise non-deterministic.</param>
-    public StigmergyAgent(int? seed = null)
+    /// <summary>Creates an agent that transmits and follows incident report messages.</summary>
+    public StigmergyAgent()
     {
         AgentType = "Stigmergy";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = true;
+        Velocity = 5;
+        ActionIntervalBase = 15;
+        MessageEchoTtl = 40;
     }
 
-    /// <summary>Minimum ticks between report transmissions.</summary>
-    public int DropCooldown { get; set; } = 15;
-
-    /// <summary>TTL for the optional world echo of a transmission (UI/metrics).</summary>
-    public int MarkerTtl { get; set; } = 40;
-
-    /// <inheritdoc />
+    /// <summary>
+    /// Steers toward the nearest sensed incident, else the nearest peer report, else a random heading.
+    /// </summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         if (observation.NearbyIncidents.Count > 0)
@@ -45,7 +37,8 @@ public sealed class StigmergyAgent : Agent
         var reports = observation.NearbyMessages
             .Select(m =>
             {
-                var ok = IncidentMarker.TryParse(m.Payload, out _, out var claimed);
+                var ok = IncidentMarker.TryParse(m.Payload, out _, out var claimedAbsolute);
+                var claimed = observation.RelativeFromAbsolute(claimedAbsolute);
                 return (Ok: ok, Claimed: claimed);
             })
             .Where(x => x.Ok)
@@ -55,35 +48,38 @@ public sealed class StigmergyAgent : Agent
         if (reports.Count > 0)
             return Steering.DirectionToward(observation.DisplacementTo(reports[0].Claimed));
 
-        return Steering.RandomAction(_rng);
+        return Steering.RandomAction(Rng);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Observes, transmits incident claims on a desynchronized interval, decides, and moves.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
         _ticksSinceReport++;
 
-        if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= DropCooldown)
+        if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= ActionInterval)
         {
             var nearest = observation.NearbyIncidents
                 .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
             ctx.World.Transmit(
                 this,
-                IncidentMarker.Format(nearest.Id, nearest.Position),
-                ttl: MarkerTtl,
+                IncidentMarker.Format(nearest.Id, observation.AbsoluteFromRelative(nearest.Position)),
+                ttl: MessageEchoTtl,
                 toAgentId: null);
             _ticksSinceReport = 0;
         }
 
         LastAction = Decide(observation);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 }
 
-/// <summary>Factory for <see cref="StigmergyAgent"/> instances.</summary>
+/// <summary>Factory for <see cref="StigmergyAgent"/>.</summary>
 public sealed class StigmergyAgentFactory : IAgentFactory
 {
     /// <inheritdoc />

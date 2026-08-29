@@ -10,7 +10,6 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class TrustAwareSearchAgent : Agent
 {
-    private readonly Random _rng;
     private readonly Dictionary<int, BetaTrust> _trust = new();
     private int _ticksSinceReport;
     private AgentAction _exploreHeading = AgentAction.Stay;
@@ -18,23 +17,12 @@ public sealed class TrustAwareSearchAgent : Agent
     private PendingProbe? _pending;
 
     /// <summary>Creates a trust-aware search agent.</summary>
-    /// <param name="seed">Optional RNG seed for deterministic exploration.</param>
-    public TrustAwareSearchAgent(int? seed = null)
+    public TrustAwareSearchAgent()
     {
         AgentType = "TrustAwareSearch";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = true;
+        Velocity = 5;
+        ActionIntervalBase = 12;
     }
-
-    /// <summary>Minimum ticks between incident report transmissions.</summary>
-    public int ReportCooldown { get; set; } = 12;
-
-    /// <summary>TTL for the optional world echo of a transmission (UI/metrics).</summary>
-    public int MessageEchoTtl { get; set; } = 50;
-
-    /// <summary>How long to persist an exploration heading before resampling.</summary>
-    public int ExplorePersistTicks { get; set; } = 8;
 
     /// <summary>Ticks allowed to verify a followed claim before marking failure.</summary>
     public int VerifyWindowTicks { get; set; } = 40;
@@ -51,7 +39,9 @@ public sealed class TrustAwareSearchAgent : Agent
     /// <summary>Prior failures (beta) for unseen senders.</summary>
     public double PriorBeta { get; set; } = 2;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Steers toward sensed incidents, verified claims, trusted peer reports, or a persistent random heading.
+    /// </summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         ResolvePending(observation);
@@ -71,7 +61,8 @@ public sealed class TrustAwareSearchAgent : Agent
             .Where(m => m.FromAgentId is int sid && sid != Id)
             .Select(m =>
             {
-                var ok = IncidentMarker.TryParse(m.Payload, out _, out var claimed);
+                var ok = IncidentMarker.TryParse(m.Payload, out _, out var claimedAbsolute);
+                var claimed = observation.RelativeFromAbsolute(claimedAbsolute);
                 return (Ok: ok, Msg: m, Claimed: claimed, Sender: m.FromAgentId!.Value);
             })
             .Where(x => x.Ok && MeanTrust(x.Sender) >= TrustThreshold)
@@ -89,19 +80,22 @@ public sealed class TrustAwareSearchAgent : Agent
         return NextExploreAction();
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Observes, transmits incident claims on a desynchronized interval, verifies followed claims, and moves.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
 
-        if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= ReportCooldown)
+        if (observation.NearbyIncidents.Count > 0 && _ticksSinceReport >= ActionInterval)
         {
             var nearest = observation.NearbyIncidents
                 .OrderBy(i => observation.DistanceTo(i.Position))
                 .First();
             ctx.World.Transmit(
                 this,
-                IncidentMarker.Format(nearest.Id, nearest.Position),
+                IncidentMarker.Format(nearest.Id, observation.AbsoluteFromRelative(nearest.Position)),
                 ttl: MessageEchoTtl,
                 toAgentId: null);
             _ticksSinceReport = 0;
@@ -112,7 +106,7 @@ public sealed class TrustAwareSearchAgent : Agent
         }
 
         LastAction = Decide(observation);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 
@@ -122,7 +116,7 @@ public sealed class TrustAwareSearchAgent : Agent
         var probe = _pending.Value;
 
         var confirmed = observation.NearbyIncidents.Any(i =>
-            Vec2.ToroidalDistance(i.Position, probe.Claimed, observation.WorldWidth, observation.WorldHeight) <= VerifyRadius);
+            observation.DistanceBetween(i.Position, probe.Claimed) <= VerifyRadius);
 
         if (confirmed)
         {
@@ -164,8 +158,8 @@ public sealed class TrustAwareSearchAgent : Agent
     {
         if (_exploreTicksRemaining <= 0 || _exploreHeading == AgentAction.Stay)
         {
-            _exploreHeading = Steering.RandomAction(_rng);
-            _exploreTicksRemaining = ExplorePersistTicks;
+            _exploreHeading = Steering.RandomAction(Rng);
+            _exploreTicksRemaining = HeadingChangeInterval;
         }
 
         _exploreTicksRemaining--;

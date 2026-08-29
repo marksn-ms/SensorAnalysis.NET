@@ -60,6 +60,7 @@ public sealed record UniformAgentOptions
     public double? CommunicationRange { get; init; }
 
     /// <summary>Optional step-size override.</summary>
+    /// <remarks>TODO: rename to <c>Velocity</c> for parity with flat agents.</remarks>
     public double? StepSize { get; init; }
 }
 
@@ -108,6 +109,7 @@ public sealed record PlaceNearAgentOptions
     public double? CommunicationRange { get; init; }
 
     /// <summary>Optional step-size override.</summary>
+    /// <remarks>TODO: rename to <c>Velocity</c> for parity with flat agents.</remarks>
     public double? StepSize { get; init; }
 }
 

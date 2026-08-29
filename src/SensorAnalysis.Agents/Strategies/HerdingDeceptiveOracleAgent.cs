@@ -12,7 +12,6 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class HerdingDeceptiveOracleAgent : Agent
 {
-    private readonly Random _rng;
     private int? _lureVictimId;
     private bool _decoySentForVictim;
     private int _fakeSlot;
@@ -20,28 +19,24 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
     private IIncidentOracle _oracle = new WorldIncidentOracle();
 
     /// <summary>Creates an oracle herding deceptive agent.</summary>
-    public HerdingDeceptiveOracleAgent(int? seed = null)
+    public HerdingDeceptiveOracleAgent()
     {
         AgentType = "HerdingDeceptiveOracle";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = false;
+        Velocity = 5;
         ContributesToIncidentDrain = false;
+        MessageEchoTtl = 40;
     }
 
     /// <summary>Inject privileged incident knowledge.</summary>
     public void SetOracle(IIncidentOracle oracle) =>
         _oracle = oracle ?? new WorldIncidentOracle();
 
-    /// <summary>Unused; decoys are one-per-victim rather than periodic spam.</summary>
-    public int DecoyPeriod { get; set; } = 30;
-
-    /// <summary>World-echo TTL.</summary>
-    public int MessageEchoTtl { get; set; } = 40;
-
-    /// <inheritdoc />
+    /// <summary>
+    /// Emits at most one lure decoy per victim using privileged incident knowledge, then herds or wanders.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
         var active = _oracle.GetActiveIncidents(ctx.World);
         var victim = PickLureVictim(observation, active);
@@ -70,7 +65,7 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
         }
 
         LastAction = ChooseHerdOrWander(observation, active, victim);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 
@@ -82,14 +77,12 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
         if (victims.Count == 0)
             return null;
 
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
         var personal = SensorRange * 0.5;
         return victims
             .OrderBy(v =>
             {
                 var distToNearestEvent = active.Min(i =>
-                    Vec2.ToroidalDistance(v.Position, i.Position, w, h));
+                    observation.DistanceBetween(v.Position, observation.RelativeFromAbsolute(i.Position)));
                 return (
                     -distToNearestEvent,
                     CountDeceptiveNear(observation, v.Position, personal * 1.5),
@@ -108,16 +101,19 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
         decoy = default;
         if (active.Count == 0)
             return false;
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
-        var eventPos = active
-            .OrderBy(i => Vec2.ToroidalDistance(victim.Position, i.Position, w, h))
-            .First()
-            .Position;
-        var claimed = DecoyLure.AwayFromEvent(victim.Position, eventPos, SensorRange, w, h);
+
+        var eventPos = observation.RelativeFromAbsolute(
+            active
+                .OrderBy(i => observation.DistanceBetween(
+                    victim.Position, observation.RelativeFromAbsolute(i.Position)))
+                .First()
+                .Position);
+
+        var claimed = DecoyLure.AwayFromEvent(victim.Position, eventPos, SensorRange, observation);
         if (claimed is null)
             return false;
-        decoy = claimed.Value;
+
+        decoy = observation.AbsoluteFromRelative(claimed.Value);
         return true;
     }
 
@@ -127,8 +123,6 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
         AgentInfo? victim)
     {
         var personal = SensorRange * 0.5;
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
 
         var deceptivePeers = observation.NearbyAgents.Where(a => IsDeceptive(a.AgentType)).ToList();
         if (deceptivePeers.Count > 0)
@@ -138,32 +132,34 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
                 .First();
             if (observation.DistanceTo(nearestDog.Position) < personal * 0.9)
             {
-                var delta = Vec2.ToroidalDisplacement(
-                    nearestDog.Position, observation.SelfPosition, w, h);
+                var delta = observation.DisplacementBetween(nearestDog.Position, Vec2.Zero);
                 return Steering.DirectionToward(delta);
             }
         }
 
         if (victim is null || active.Count == 0)
-            return Steering.RandomAction(_rng);
+            return Steering.RandomAction(Rng);
 
-        var eventPos = active
-            .OrderBy(i => Vec2.ToroidalDistance(victim.Value.Position, i.Position, w, h))
-            .First()
-            .Position;
+        var eventPos = observation.RelativeFromAbsolute(
+            active
+                .OrderBy(i => observation.DistanceBetween(
+                    victim.Value.Position, observation.RelativeFromAbsolute(i.Position)))
+                .First()
+                .Position);
 
-        var toEvent = Vec2.ToroidalDisplacement(victim.Value.Position, eventPos, w, h);
+        var toEvent = observation.DisplacementBetween(victim.Value.Position, eventPos);
         var dist = toEvent.Length;
         Vec2 block;
         if (dist < 1e-6)
         {
-            block = Vec2.Wrap(victim.Value.Position + new Vec2(personal, 0), w, h);
+            block = victim.Value.Position + new Vec2(personal, 0);
         }
         else
         {
             var dir = toEvent.Normalize();
             var along = Math.Min(personal, dist * 0.5);
-            block = Vec2.Wrap(victim.Value.Position + dir * along, w, h);
+            var victimAbs = observation.AbsoluteFromRelative(victim.Value.Position);
+            block = observation.RelativeFromAbsolute(victimAbs + dir * along);
         }
 
         return Steering.DirectionToward(observation.DisplacementTo(block));
@@ -182,7 +178,7 @@ public sealed class HerdingDeceptiveOracleAgent : Agent
     private static int CountDeceptiveNear(AgentObservation observation, Vec2 pos, double radius) =>
         observation.NearbyAgents.Count(a =>
             IsDeceptive(a.AgentType) &&
-            Vec2.ToroidalDistance(a.Position, pos, observation.WorldWidth, observation.WorldHeight) <= radius);
+            observation.DistanceBetween(a.Position, pos) <= radius);
 
     private static int StablePreferKey(int selfId, int victimId) =>
         HashCode.Combine(selfId, victimId);

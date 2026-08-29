@@ -58,23 +58,24 @@ public sealed class EventHypothesisMemory
             h.TicksSinceEvidence++;
     }
 
-    /// <summary>Incorporate a local sensor cue.</summary>
-    public EventHypothesis IngestCue(Vec2 perceived, double strength, double worldWidth, double worldHeight)
+    /// <summary>Incorporate a local sensor cue (observer-relative position).</summary>
+    public EventHypothesis IngestCue(Vec2 relativePerceived, double strength, AgentObservation observation)
     {
+        var absolute = observation.AbsoluteFromRelative(relativePerceived);
         var bump = Math.Clamp(strength, 0, 1) * CueBumpScale;
-        return Upsert(perceived, bump, HypothesisSource.Sensor, informantId: null, worldWidth, worldHeight);
+        return Upsert(absolute, bump, HypothesisSource.Sensor, informantId: null, observation);
     }
 
-    /// <summary>Incorporate a radio claim as a rumor (maybe true, maybe not).</summary>
+    /// <summary>Incorporate a radio claim as a rumor (observer-relative position).</summary>
     public EventHypothesis IngestRumor(
-        Vec2 claimed,
+        Vec2 relativeClaimed,
         int? fromAgentId,
-        double worldWidth,
-        double worldHeight,
+        AgentObservation observation,
         double trustWeight = 1)
     {
+        var absolute = observation.AbsoluteFromRelative(relativeClaimed);
         var bump = RumorBump * Math.Clamp(trustWeight, 0, 1);
-        return Upsert(claimed, bump, HypothesisSource.Rumor, fromAgentId, worldWidth, worldHeight);
+        return Upsert(absolute, bump, HypothesisSource.Rumor, fromAgentId, observation);
     }
 
     /// <summary>Decay tracks that got no evidence this tick and drop dead ones.</summary>
@@ -98,20 +99,19 @@ public sealed class EventHypothesisMemory
     }
 
     private EventHypothesis Upsert(
-        Vec2 sample,
+        Vec2 absoluteSample,
         double bump,
         HypothesisSource source,
         int? informantId,
-        double worldWidth,
-        double worldHeight)
+        AgentObservation observation)
     {
-        var match = FindNearest(sample, worldWidth, worldHeight);
+        var match = FindNearest(absoluteSample, observation);
         if (match is null)
         {
             match = new EventHypothesis
             {
                 LocalId = _nextLocalId++,
-                Estimate = sample,
+                Estimate = absoluteSample,
                 Confidence = 0,
                 TicksSinceEvidence = 0,
                 LastSource = source,
@@ -122,7 +122,10 @@ public sealed class EventHypothesisMemory
         else
         {
             var alpha = Math.Clamp(0.2 + bump, 0.2, 0.65);
-            match.Estimate = BlendToroidal(match.Estimate, sample, alpha, worldWidth, worldHeight);
+            var currentRelative = observation.RelativeFromAbsolute(match.Estimate);
+            var sampleRelative = observation.RelativeFromAbsolute(absoluteSample);
+            var delta = observation.DisplacementBetween(currentRelative, sampleRelative);
+            match.Estimate = observation.AbsoluteFromRelative(currentRelative + delta * alpha);
         }
 
         match.Confidence = 1.0 - (1.0 - match.Confidence) * (1.0 - Math.Clamp(bump, 0, 1));
@@ -132,13 +135,14 @@ public sealed class EventHypothesisMemory
         return match;
     }
 
-    private EventHypothesis? FindNearest(Vec2 sample, double worldWidth, double worldHeight)
+    private EventHypothesis? FindNearest(Vec2 absoluteSample, AgentObservation observation)
     {
         EventHypothesis? best = null;
         var bestD = double.PositiveInfinity;
+        var sampleRelative = observation.RelativeFromAbsolute(absoluteSample);
         foreach (var h in _items)
         {
-            var d = Vec2.ToroidalDistance(h.Estimate, sample, worldWidth, worldHeight);
+            var d = observation.DistanceBetween(observation.RelativeFromAbsolute(h.Estimate), sampleRelative);
             if (d <= AssociationRadius && d < bestD)
             {
                 bestD = d;
@@ -147,11 +151,5 @@ public sealed class EventHypothesisMemory
         }
 
         return best;
-    }
-
-    private static Vec2 BlendToroidal(Vec2 current, Vec2 sample, double alpha, double w, double h)
-    {
-        var delta = Vec2.ToroidalDisplacement(current, sample, w, h);
-        return Vec2.Wrap(current + delta * alpha, w, h);
     }
 }

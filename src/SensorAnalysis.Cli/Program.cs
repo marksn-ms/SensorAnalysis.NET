@@ -79,9 +79,10 @@ runner.AddWatcher(trustTel);
 runner.TrialCompleted += trial =>
     Console.WriteLine($"  trial {trial + 1}/{recipe.Trials} done");
 
+var deployables = BuiltinCatalog.CreateDeployables();
 var context = new DeployContext
 {
-    ResolveAgent = name => agents.Get(name).Create()
+    Deployables = deployables
 };
 
 var manifest = runner.RunExperiment(new ExperimentRequest

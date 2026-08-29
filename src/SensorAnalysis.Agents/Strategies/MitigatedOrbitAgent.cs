@@ -30,7 +30,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     private int _explorePersist;
 
     /// <summary>Creates a mitigated orbiting agent.</summary>
-    public MitigatedOrbitAgent(int? seed = null) : base(seed)
+    public MitigatedOrbitAgent()
     {
         AgentType = "MitigatedOrbit";
     }
@@ -112,7 +112,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     }
 
     /// <inheritdoc />
-    protected override bool ShouldFollowReport(MessageInfo msg, Vec2 claimed)
+    protected override bool ShouldFollowReport(MessageInfo msg, Vec2 claimedRelative)
     {
         if (msg.FromAgentId is not int sid)
             return false;
@@ -120,11 +120,11 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     }
 
     /// <inheritdoc />
-    protected override void OnFollowedReport(MessageInfo msg, Vec2 claimed, int incidentId)
+    protected override void OnFollowedReport(MessageInfo msg, Vec2 claimedRelative, int incidentId)
     {
         if (msg.FromAgentId is not int sid)
             return;
-        _pending = new PendingProbe(sid, claimed, 0, incidentId);
+        _pending = new PendingProbe(sid, claimedRelative, 0, incidentId);
     }
 
     /// <inheritdoc />
@@ -152,14 +152,14 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             .ToList();
 
         return Steering.ExploreWithPersonalSpace(
-            observation.SelfPosition,
             _exploreHeading,
             _explorePersist,
             trustedNeighbors,
             personalSpace,
-            observation.WorldWidth,
-            observation.WorldHeight,
+            Velocity,
+            observation,
             Rng,
+            HeadingChangeInterval,
             out _exploreHeading,
             out _explorePersist);
     }
@@ -224,7 +224,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             return;
 
         var cueNearClaim = observation.NearbyIncidents.Any(i =>
-            Vec2.ToroidalDistance(i.Position, probe.Claimed, observation.WorldWidth, observation.WorldHeight) <= VerifyRadius);
+            observation.DistanceBetween(i.Position, probe.Claimed) <= VerifyRadius);
 
         if (cueNearClaim)
         {
@@ -257,7 +257,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     {
         // Only after we have ourselves announced this commitment (reduces false peer blame).
         if (!OrbitAnnounced || CommittedIncidentId is not int iid) return;
-        var center = ResolveCommittedCenter(observation);
+        var center = RelativeCommittedCenter(observation);
         var station = SensorRange * 0.6;
         if (observation.DistanceTo(center) > station &&
             !AnyCueNear(observation, center, station))
@@ -266,15 +266,14 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
         var present = new HashSet<int>();
         foreach (var peer in observation.NearbyAgents)
         {
-            var peerInRangeOfEvent = Vec2.ToroidalDistance(
-                peer.Position, center, observation.WorldWidth, observation.WorldHeight) <= SensorRange * 0.6;
+            var peerInRangeOfEvent = observation.DistanceBetween(peer.Position, center) <= SensorRange * 0.6;
             if (!peerInRangeOfEvent) continue;
             present.Add(peer.Id);
             _coPresentTicks[peer.Id] = _coPresentTicks.GetValueOrDefault(peer.Id) + 1;
 
             var reportedNear = HeardClaims.Any(c =>
                 c.AgentId == peer.Id &&
-                Vec2.ToroidalDistance(c.Position, center, observation.WorldWidth, observation.WorldHeight) <= station)
+                observation.DistanceBetween(c.Position, center) <= station)
                 || HeardReports.Contains((peer.Id, iid));
             if (reportedNear) continue;
             if (_coPresentTicks[peer.Id] < SilenceGraceTicks) continue;

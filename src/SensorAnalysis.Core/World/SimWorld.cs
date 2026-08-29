@@ -42,6 +42,9 @@ public sealed class SimWorld
     /// <summary>RNG seed supplied at construction.</summary>
     public int Seed { get; }
 
+    /// <summary>Shared deterministic RNG for the world and everything it hosts.</summary>
+    public Random Random => _rng;
+
     /// <summary>Human-readable world title.</summary>
     public string Title { get; set; }
 
@@ -84,7 +87,11 @@ public sealed class SimWorld
 
     /// <summary>Adds an agent to the world.</summary>
     /// <param name="agent">Agent instance to add.</param>
-    public void Add(Agent agent) => _agents.Add(agent);
+    public void Add(Agent agent)
+    {
+        agent.InitializeTiming(_rng);
+        _agents.Add(agent);
+    }
 
     /// <summary>Adds an incident to the world.</summary>
     /// <param name="incident">Incident instance to add.</param>
@@ -180,30 +187,33 @@ public sealed class SimWorld
     /// <returns>An <see cref="AgentObservation"/> including computed instantaneous reward.</returns>
     public AgentObservation Observe(Agent self)
     {
+        var origin = self.Position;
         var range = self.SensorRange;
         var nearbyAgents = _agents
-            .Where(a => a.Id != self.Id && Distance(a.Position, self.Position) <= range)
-            .Select(a => new AgentInfo(a.Id, a.Position, a.AgentType))
+            .Where(a => a.Id != self.Id && Distance(a.Position, origin) <= range)
+            .Select(a => new AgentInfo(
+                a.Id,
+                Displacement(origin, a.Position),
+                a.LastAction.ToStep() * a.Velocity,
+                a.LastAction,
+                a.AgentType))
             .ToList();
 
-        var nearbyIncidents = SenseIncidents(self, range);
+        var nearbyIncidents = SenseIncidents(self, origin, range);
+        var nearbyMessages = self.DrainInbox()
+            .Select(m => MessageInfo.ForObserver(m, Displacement(origin, m.Position), self.Id))
+            .ToList();
 
-        // Decision-facing messages come from the radio inbox (not lingering environmental reads).
-        var nearbyMessages = self.DrainInbox();
+        var obs = new AgentObservation(
+            this,
+            origin,
+            CurrentTick,
+            nearbyAgents,
+            nearbyIncidents,
+            nearbyMessages);
 
-        var obs = new AgentObservation
-        {
-            Tick = CurrentTick,
-            SelfPosition = self.Position,
-            WorldWidth = WorldWidthPx,
-            WorldHeight = WorldHeightPx,
-            NearbyAgents = nearbyAgents,
-            NearbyIncidents = nearbyIncidents,
-            NearbyMessages = nearbyMessages,
-            InstantReward = 0
-        };
-        // Compute reward with full world context (coverage bonus needs tile state)
-        return obs with { InstantReward = RewardModel.Evaluate(self, obs, this) };
+        obs.InstantReward = RewardModel.Evaluate(self, obs, this);
+        return obs;
     }
 
     /// <summary>
@@ -313,7 +323,7 @@ public sealed class SimWorld
         CurrentTick++;
     }
 
-    private List<IncidentInfo> SenseIncidents(Agent self, double range)
+    private List<IncidentInfo> SenseIncidents(Agent self, Vec2 origin, double range)
     {
         var list = new List<IncidentInfo>();
         foreach (var incident in _incidents)
@@ -323,8 +333,15 @@ public sealed class SimWorld
 
             if (Options.ExactSensing)
             {
-                if (Distance(incident.Position, self.Position) <= range)
-                    list.Add(new IncidentInfo(incident.Id, incident.Position, incident.Intensity, 1.0));
+                if (Distance(incident.Position, origin) <= range)
+                {
+                    list.Add(new IncidentInfo(
+                        incident.Id,
+                        Displacement(origin, incident.Position),
+                        incident.Intensity,
+                        1.0));
+                }
+
                 continue;
             }
 
@@ -333,7 +350,7 @@ public sealed class SimWorld
                     incident, self, CurrentTick, Seed, profile,
                     WorldWidthPx, WorldHeightPx, out var cue))
             {
-                list.Add(cue);
+                list.Add(cue with { Position = Displacement(origin, cue.Position) });
             }
         }
 

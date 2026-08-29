@@ -14,14 +14,17 @@ public static class DecoyLure
     /// <summary>
     /// Place a decoy where the victim would reasonably expect to see an event:
     /// along the ray from the true event through the victim, at 90% of <paramref name="sensorRange"/>.
-    /// Returns null when the victim is sitting on the event (no bearing).
+    /// Positions are observer-relative. Returns null when the victim is on the event (no bearing).
     /// </summary>
-    public static Vec2? AwayFromEvent(Vec2 victim, Vec2 eventPos, double sensorRange, double worldWidth, double worldHeight)
+    public static Vec2? AwayFromEvent(
+        Vec2 victimRelative,
+        Vec2 eventRelative,
+        double sensorRange,
+        AgentObservation observation)
     {
-        var away = Vec2.ToroidalDisplacement(eventPos, victim, worldWidth, worldHeight);
+        var away = observation.DisplacementBetween(eventRelative, victimRelative);
         if (away.Length < 1e-6)
             return null;
-        var claimed = victim + away.Normalize() * (sensorRange * RangeFraction);
-        return Vec2.Wrap(claimed, worldWidth, worldHeight);
+        return victimRelative + away.Normalize() * (sensorRange * RangeFraction);
     }
 }

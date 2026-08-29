@@ -79,7 +79,12 @@ public sealed class SimulationRunner
     {
         if (World is null) throw new InvalidOperationException("Call Reset first.");
         var deployer = step.CreateDeployer();
-        deployer.Attach(World, step.Options, context);
+        deployer.Attach(World, step.Options, new DeployContext
+        {
+            Deployables = context.Deployables,
+            Parameters = step.Parameters.Count > 0 ? step.Parameters : context.Parameters,
+            RandomSalt = step.RandomSalt != 0 ? step.RandomSalt : context.RandomSalt
+        });
         World.AddDeployer(deployer);
     }
 
@@ -97,7 +102,8 @@ public sealed class SimulationRunner
             applied.Add(i);
             AttachDeployer(step, new DeployContext
             {
-                ResolveAgent = baseContext.ResolveAgent,
+                Deployables = baseContext.Deployables,
+                Parameters = step.Parameters.Count > 0 ? step.Parameters : baseContext.Parameters,
                 RandomSalt = step.RandomSalt
             });
         }
@@ -217,10 +223,14 @@ public sealed class DeployStep
     /// <summary>Options object matching the deployer's <see cref="IDeployer.OptionsType"/>.</summary>
     public required object Options { get; init; }
 
+    /// <summary>Full parameter bag (deployer + deployable fields) for this step.</summary>
+    public IReadOnlyDictionary<string, object?> Parameters { get; init; }
+        = new Dictionary<string, object?>(StringComparer.Ordinal);
+
     /// <summary>Attach when the world tick reaches this value (0 = before the first step).</summary>
     public long AtTick { get; init; }
 
-    /// <summary>Per-step RNG salt (0 is the shared CLI/GUI default).</summary>
+    /// <summary>Per-step RNG salt (legacy; deployers use <see cref="World.SimWorld.Random"/>).</summary>
     public int RandomSalt { get; init; }
 }
 

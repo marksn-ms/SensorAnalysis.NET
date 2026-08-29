@@ -9,26 +9,21 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class CrowdOnlyDeceptiveAgent : Agent
 {
-    private readonly Random _rng;
-
     /// <summary>Creates a crowd-only deceptive agent.</summary>
-    public CrowdOnlyDeceptiveAgent(int? seed = null)
+    public CrowdOnlyDeceptiveAgent()
     {
         AgentType = "CrowdOnlyDeceptive";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = true;
+        Velocity = 5;
         ContributesToIncidentDrain = false;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Closes on the nearest honest peer to crowd their personal space, with mild repulsion from other infiltrators.
+    /// </summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         var personal = SensorRange * 0.5;
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
 
-        // Mild repulsion from other infiltrators to avoid hip-lock.
         var dogs = observation.NearbyAgents
             .Where(a => IsCrowdInfiltrator(a.AgentType))
             .ToList();
@@ -37,8 +32,7 @@ public sealed class CrowdOnlyDeceptiveAgent : Agent
             var nearestDog = dogs.OrderBy(a => observation.DistanceTo(a.Position)).First();
             if (observation.DistanceTo(nearestDog.Position) < personal * 0.9)
             {
-                var away = Vec2.ToroidalDisplacement(
-                    nearestDog.Position, observation.SelfPosition, w, h);
+                var away = observation.DisplacementBetween(nearestDog.Position, Vec2.Zero);
                 return Steering.DirectionToward(away);
             }
         }
@@ -49,13 +43,11 @@ public sealed class CrowdOnlyDeceptiveAgent : Agent
         if (victims.Count == 0)
             return LazyLoiter();
 
-        // Close on the nearest honest peer — goal is to enter their personal space.
         var victim = victims.OrderBy(v => observation.DistanceTo(v.Position)).First();
         var dist = observation.DistanceTo(victim.Position);
         if (dist < personal * 0.35)
         {
-            // Already deep inside their space: drift with them / stay close.
-            if (_rng.Next(3) == 0)
+            if (Rng.Next(3) == 0)
                 return Steering.DirectionToward(observation.DisplacementTo(victim.Position));
             return AgentAction.Stay;
         }
@@ -65,12 +57,12 @@ public sealed class CrowdOnlyDeceptiveAgent : Agent
 
     private AgentAction LazyLoiter()
     {
-        if (_rng.Next(4) != 0)
+        if (Rng.Next(4) != 0)
             return AgentAction.Stay;
         AgentAction action;
         do
         {
-            action = Steering.RandomAction(_rng);
+            action = Steering.RandomAction(Rng);
         } while (action == AgentAction.Stay);
         return action;
     }

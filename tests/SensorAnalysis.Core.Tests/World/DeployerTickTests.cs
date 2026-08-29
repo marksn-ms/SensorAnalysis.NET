@@ -1,8 +1,10 @@
 using FluentAssertions;
+using SensorAnalysis.Agents;
 using SensorAnalysis.Agents.Deployers;
 using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
+using SensorAnalysis.Core.Serialization;
 using SensorAnalysis.Core.World;
 using Xunit;
 
@@ -11,13 +13,13 @@ namespace SensorAnalysis.Core.Tests.World;
 /// <summary>Tests for ticking deployers registered on <see cref="SimWorld"/>.</summary>
 public class DeployerTickTests
 {
-    private static DeployContext Ctx(int salt = 0) => new()
+    private static DeployContext Ctx(IReadOnlyDictionary<string, object?>? parameters = null, int salt = 0) => new()
     {
-        RandomSalt = salt,
-        ResolveAgent = _ => new RandomWalkAgent()
+        Deployables = BuiltinCatalog.CreateDeployables(),
+        Parameters = parameters ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+        RandomSalt = salt
     };
 
-    /// <summary>Gaussian + periodic steps spawn waves on schedule.</summary>
     [Fact]
     public void SimulationRunner_RegistersPeriodicWaves_AndSpawnsOnSchedule()
     {
@@ -34,12 +36,13 @@ public class DeployerTickTests
                 new DeployStep
                 {
                     CreateDeployer = () => new GaussianDeployer(),
-                    Options = new GaussianDeployOptions { Count = 4, TypeName = "RandomWalk" }
+                    Options = new GaussianDeployOptions { Count = 4, TypeName = "RandomWalk" },
+                    Parameters = new Dictionary<string, object?> { ["SensorRange"] = 80.0 }
                 },
                 new DeployStep
                 {
-                    CreateDeployer = () => new PeriodicIncidentDeployer(),
-                    Options = new PeriodicIncidentOptions { PeriodTicks = 5, Count = 1 }
+                    CreateDeployer = () => new PeriodicDeployer(),
+                    Options = new PeriodicDeployOptions { PeriodTicks = 5, Count = 1, TypeName = "Incident" }
                 }
             },
             Ctx());
@@ -56,7 +59,6 @@ public class DeployerTickTests
         runner.World.Incidents.Should().HaveCount(2);
     }
 
-    /// <summary>PlaceNear lands within RangeFactor × host sensor range.</summary>
     [Fact]
     public void PlaceNear_UsesRangeFactorOfHostSensor()
     {
@@ -66,12 +68,11 @@ public class DeployerTickTests
             TileSizePx = new GridSize(25, 25)
         }, seed: 7);
 
-        var host = new RandomWalkAgent(seed: 1)
+        var host = new RandomWalkAgent
         {
             Position = new Vec2(100, 100),
             SensorRange = 40
         };
-        // AgentType comes from class name "RandomWalk"
         w.Add(host);
 
         var near = new PlaceNearDeployer();
@@ -80,7 +81,8 @@ public class DeployerTickTests
             Count = 1,
             NearTypeName = "RandomWalk",
             RangeFactor = 0.5,
-            PeriodTicks = 0
+            PeriodTicks = 0,
+            TypeName = "Incident"
         }, Ctx());
 
         w.Incidents.Should().HaveCount(1);
@@ -88,7 +90,6 @@ public class DeployerTickTests
             .Should().BeLessThanOrEqualTo(host.SensorRange * 0.5 * 1.15 + 1e-6);
     }
 
-    /// <summary>Round-robin PlaceNear assigns one incident per host instead of stacking.</summary>
     [Fact]
     public void PlaceNear_RoundRobin_SpreadsAcrossHosts()
     {
@@ -100,9 +101,9 @@ public class DeployerTickTests
 
         var hosts = new[]
         {
-            new RandomWalkAgent(seed: 1) { Position = new Vec2(40, 40), SensorRange = 40 },
-            new RandomWalkAgent(seed: 2) { Position = new Vec2(160, 40), SensorRange = 40 },
-            new RandomWalkAgent(seed: 3) { Position = new Vec2(40, 160), SensorRange = 40 }
+            new RandomWalkAgent { Position = new Vec2(40, 40), SensorRange = 40 },
+            new RandomWalkAgent { Position = new Vec2(160, 40), SensorRange = 40 },
+            new RandomWalkAgent { Position = new Vec2(40, 160), SensorRange = 40 }
         };
         foreach (var host in hosts)
             w.Add(host);
@@ -114,7 +115,8 @@ public class DeployerTickTests
             NearTypeName = "RandomWalk",
             RangeFactor = 0.5,
             PeriodTicks = 0,
-            RoundRobinHosts = true
+            RoundRobinHosts = true,
+            TypeName = "Incident"
         }, Ctx());
 
         w.Incidents.Should().HaveCount(3);
@@ -126,7 +128,6 @@ public class DeployerTickTests
         assigned.Should().HaveCount(3);
     }
 
-    /// <summary>HerdingDeceptive orbits a visible event when no honest peer is in range.</summary>
     [Fact]
     public void HerdingDeceptive_OrbitsVisibleEvent_WhenAlone()
     {
@@ -137,7 +138,7 @@ public class DeployerTickTests
             ExactSensing = true
         }, seed: 3);
 
-        var dog = new HerdingDeceptiveAgent(seed: 11)
+        var dog = new HerdingDeceptiveAgent
         {
             Position = new Vec2(200, 200),
             SensorRange = 80
@@ -156,7 +157,6 @@ public class DeployerTickTests
         dist.Should().BeInRange(20, 60);
     }
 
-    /// <summary>Additive attach does not clear existing agents.</summary>
     [Fact]
     public void AttachDeployer_DoesNotClearExistingEntities()
     {
@@ -171,19 +171,125 @@ public class DeployerTickTests
         runner.AttachDeployer(new DeployStep
         {
             CreateDeployer = () => new GaussianDeployer(),
-            Options = new GaussianDeployOptions { Count = 2, TypeName = "RandomWalk" }
-        }, Ctx(1));
+            Options = new GaussianDeployOptions { Count = 2, TypeName = "RandomWalk" },
+            Parameters = new Dictionary<string, object?> { ["SensorRange"] = 80.0 }
+        }, Ctx(null, 1));
 
         runner.World.Agents.Should().HaveCount(3);
     }
 
-    /// <summary>Gaussian options expose Count + Type for the UI catalog.</summary>
     [Fact]
     public void DeployerParameterCatalog_DescribesGaussianOptions()
     {
-        var props = DeployerParameterCatalog.Describe(typeof(GaussianDeployOptions));
+        var options = new GaussianDeployOptions();
+        var props = DeployerParameterCatalog.Describe(typeof(GaussianDeployOptions), options);
         props.Should().Contain(p => p.Name == "Count" && p.Required);
-        props.Should().Contain(p => p.Name == "TypeName" && p.IsAgentType);
-        DeployerParameterCatalog.TryValidate(new GaussianDeployOptions(), out _).Should().BeTrue();
+        props.Should().Contain(p => p.Name == "TypeName" && p.IsDeployableType);
+        DeployerParameterCatalog.TryValidate(options, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeployableParameterCatalog_DescribesAgentDefaults()
+    {
+        var props = DeployableParameterCatalog.Describe(typeof(AgentDeployDefaults));
+        props.Should().Contain(p => p.Name == "SensorRange");
+    }
+
+    [Fact]
+    public void UniformAgentsAndIncidents_DoNotSharePlacementSequence()
+    {
+        var w = new SimWorld(new WorldOptions
+        {
+            TileCount = new GridSize(8, 8),
+            TileSizePx = new GridSize(25, 25)
+        }, seed: 42);
+
+        var uniformAgents = new UniformDeployer();
+        uniformAgents.Attach(w, new UniformDeployOptions
+        {
+            Count = 10,
+            TypeName = "RandomWalk"
+        }, Ctx(new Dictionary<string, object?> { ["SensorRange"] = 80.0 }));
+
+        var uniformIncidents = new UniformDeployer();
+        uniformIncidents.Attach(w, new UniformDeployOptions
+        {
+            Count = 10,
+            TypeName = "Incident"
+        }, Ctx());
+
+        w.Agents.Should().HaveCount(10);
+        w.Incidents.Should().HaveCount(10);
+
+        for (int i = 0; i < 10; i++)
+            w.Agents[i].Position.Should().NotBe(w.Incidents[i].Position);
+    }
+
+    [Fact]
+    public void RecipeCompiler_AcceptsLegacyDeployerNames()
+    {
+        var deployers = BuiltinCatalog.CreateDeployers();
+        var recipe = new ExperimentRecipe
+        {
+            Directives =
+            [
+                new RecipeDirective
+                {
+                    Deployer = "Random",
+                    Parameters = new Dictionary<string, object?>
+                    {
+                        ["Count"] = 2,
+                        ["TypeName"] = "RandomWalk",
+                        ["SensorRange"] = 50.0
+                    }
+                },
+                new RecipeDirective
+                {
+                    Deployer = "UniformIncidents",
+                    Parameters = new Dictionary<string, object?> { ["Count"] = 1 }
+                }
+            ]
+        };
+
+        var steps = RecipeCompiler.CompileSteps(recipe, deployers);
+        steps.Should().HaveCount(2);
+        steps[0].Options.Should().BeOfType<UniformDeployOptions>()
+            .Which.TypeName.Should().Be("RandomWalk");
+        steps[1].Options.Should().BeOfType<UniformDeployOptions>()
+            .Which.TypeName.Should().Be("Incident");
+    }
+
+    [Fact]
+    public void DeployableCapabilities_RejectsIncidentNearAnchor()
+    {
+        var registry = BuiltinCatalog.CreateDeployables();
+        DeployableCapabilities.SupportsNearAnchor(registry.Get("Incident"), out var reason)
+            .Should().BeFalse();
+        reason.Should().Contain("SensorRange");
+    }
+
+    [Fact]
+    public void RecipeCompiler_MapsLegacyIncidentKindToIncidentFactory()
+    {
+        var deployers = BuiltinCatalog.CreateDeployers();
+        var recipe = new ExperimentRecipe
+        {
+            Directives =
+            [
+                new RecipeDirective
+                {
+                    Deployer = "Uniform",
+                    Parameters = new Dictionary<string, object?>
+                    {
+                        ["Count"] = 1,
+                        ["TypeName"] = "Hotspot"
+                    }
+                }
+            ]
+        };
+
+        var steps = RecipeCompiler.CompileSteps(recipe, deployers);
+        steps[0].Parameters["TypeName"].Should().Be("Incident");
+        steps[0].Parameters["Kind"].Should().Be("Hotspot");
     }
 }

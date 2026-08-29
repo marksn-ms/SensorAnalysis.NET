@@ -10,26 +10,17 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class DeceptiveStigmergyAgent : Agent
 {
-    private readonly Random _rng;
     private int _ticksSinceDecoy;
     private int _nextFakeId = 10_000;
 
     /// <summary>Creates a deceptive reporting agent.</summary>
-    /// <param name="seed">Optional RNG seed for deterministic decoys/motion.</param>
-    public DeceptiveStigmergyAgent(int? seed = null)
+    public DeceptiveStigmergyAgent()
     {
         AgentType = "DeceptiveStigmergy";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = false;
+        Velocity = 5;
         ContributesToIncidentDrain = false;
+        ActionIntervalBase = 12;
     }
-
-    /// <summary>Ticks between decoy transmissions.</summary>
-    public int DecoyPeriod { get; set; } = 12;
-
-    /// <summary>TTL for the optional world echo of a transmission (UI/metrics).</summary>
-    public int MessageEchoTtl { get; set; } = 50;
 
     /// <summary>
     /// When true, navigate and place decoys using all active world incidents (privileged intel),
@@ -37,22 +28,24 @@ public sealed class DeceptiveStigmergyAgent : Agent
     /// </summary>
     public bool OmniscientIncidents { get; set; } = true;
 
-    /// <inheritdoc />
+    /// <summary>Wanders randomly while staying away from real incidents.</summary>
     public override AgentAction Decide(AgentObservation observation)
     {
-        // Stay away from real incidents so we do not crowd-clear them; patrol / wander.
-        // Omniscient path uses Tick to steer using world state after observe.
-        return Steering.RandomAction(_rng);
+        _ = observation;
+        return Steering.RandomAction(Rng);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Observes, emits decoy claims on a desynchronized interval, steers away from real incidents, and moves.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
         var active = ctx.World.Incidents.Where(i => !i.IsDepleted).ToList();
 
         _ticksSinceDecoy++;
-        if (_ticksSinceDecoy >= DecoyPeriod)
+        if (_ticksSinceDecoy >= ActionInterval)
         {
             var claimed = PickDecoyAwayFromIncidents(ctx, active);
             ctx.World.Transmit(
@@ -63,8 +56,6 @@ public sealed class DeceptiveStigmergyAgent : Agent
             _ticksSinceDecoy = 0;
         }
 
-        // Move: if omniscient and incidents exist, orbit away from the nearest truth
-        // (keep broadcasting while not helping to clear). Otherwise random walk.
         if (OmniscientIncidents && active.Count > 0)
         {
             var nearest = active
@@ -72,7 +63,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
                 .First();
             var away = ctx.World.Displacement(nearest.Position, Position);
             if (away.X * away.X + away.Y * away.Y < 1e-6)
-                away = new Vec2(_rng.NextDouble() - 0.5, _rng.NextDouble() - 0.5);
+                away = new Vec2(Rng.NextDouble() - 0.5, Rng.NextDouble() - 0.5);
             LastAction = Steering.DirectionToward(away);
         }
         else
@@ -80,7 +71,7 @@ public sealed class DeceptiveStigmergyAgent : Agent
             LastAction = Decide(observation);
         }
 
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 
@@ -90,15 +81,14 @@ public sealed class DeceptiveStigmergyAgent : Agent
         var h = ctx.World.WorldHeightPx;
         if (active.Count == 0)
         {
-            return ctx.World.Wrap(new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h));
+            return ctx.World.Wrap(new Vec2(Rng.NextDouble() * w, Rng.NextDouble() * h));
         }
 
-        // Sample candidate claims; prefer points far from every real incident.
         Vec2 best = Position;
         var bestScore = double.NegativeInfinity;
         for (int i = 0; i < 24; i++)
         {
-            var candidate = new Vec2(_rng.NextDouble() * w, _rng.NextDouble() * h);
+            var candidate = new Vec2(Rng.NextDouble() * w, Rng.NextDouble() * h);
             var minDist = active.Min(inc => ctx.World.Distance(candidate, inc.Position));
             if (minDist > bestScore)
             {

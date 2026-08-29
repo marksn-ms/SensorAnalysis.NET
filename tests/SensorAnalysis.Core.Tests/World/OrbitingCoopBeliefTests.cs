@@ -18,12 +18,12 @@ public class OrbitingCoopBeliefTests
             TileSizePx = new GridSize(25, 25)
         }, seed: 1);
 
-        var honest = new OrbitingCoopAgent(seed: 2)
+        var honest = new OrbitingCoopAgent
         {
             Position = new Vec2(100, 100),
             SensorRange = 80
         };
-        var sender = new RandomWalkAgent(seed: 3)
+        var sender = new RandomWalkAgent
         {
             Position = new Vec2(108, 100),
             SensorRange = 80

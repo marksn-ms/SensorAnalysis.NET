@@ -15,7 +15,7 @@ public sealed class DeployRequest
     public required string AgentTypeName { get; init; }
 
     /// <summary>Factory for honest agents.</summary>
-    public required Func<string, Agent> AgentFactory { get; init; }
+    public required Func<string, Domain.Agent> AgentFactory { get; init; }
 
     /// <summary>Initial incident count for immediate deployers.</summary>
     public int IncidentCount { get; init; }
@@ -27,7 +27,7 @@ public sealed class DeployRequest
     public int AdversaryCount { get; init; }
 
     /// <summary>Factory for adversary agents when <see cref="AdversaryCount"/> &gt; 0.</summary>
-    public Func<string, Agent>? AdversaryFactory { get; init; }
+    public Func<string, Domain.Agent>? AdversaryFactory { get; init; }
 
     /// <summary>Adversary factory type name (when using options conversion).</summary>
     public string AdversaryTypeName { get; init; } = "HerdingDeceptive";
@@ -44,27 +44,22 @@ public sealed class DeployRequest
     /// <summary>Salt mixed into deployer RNG.</summary>
     public int RandomSalt { get; init; }
 
-    /// <summary>When &gt; 0, CLI also attaches a <see cref="PeriodicIncidentDeployer"/>.</summary>
+    /// <summary>When &gt; 0, CLI also attaches a <see cref="PeriodicDeployer"/>.</summary>
     public int IncidentPeriodTicks { get; init; }
 
     /// <summary>Incidents created on each periodic wave.</summary>
     public int IncidentsPerWave { get; init; } = 1;
 
     /// <summary>Builds a <see cref="DeployContext"/> from this request's factories.</summary>
-    public DeployContext ToContext()
+    public DeployContext ToContext(DeployableRegistry deployables)
     {
-        var honest = AgentFactory;
-        var adv = AdversaryFactory;
-        var advType = AdversaryTypeName;
         return new DeployContext
         {
+            Deployables = deployables,
             RandomSalt = RandomSalt,
-            ResolveAgent = name =>
+            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                if (adv is not null &&
-                    string.Equals(name, advType, StringComparison.OrdinalIgnoreCase))
-                    return adv(name);
-                return honest(name);
+                ["SensorRange"] = SensorRange
             }
         };
     }

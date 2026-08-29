@@ -16,7 +16,7 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
     private readonly Dictionary<int, int> _intrusionTicks = new();
 
     /// <summary>Creates a crowd-aware mitigated agent.</summary>
-    public CrowdAwareMitigatedAgent(int? seed = null) : base(seed)
+    public CrowdAwareMitigatedAgent()
     {
         AgentType = "CrowdAwareMitigated";
     }
@@ -39,7 +39,9 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
     /// <summary>Mean trust toward a peer (prior if unknown).</summary>
     public double MeanTrustToward(int agentId) => MeanTrust(agentId);
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Tracks herding intrusions against peers, then delegates exploration to the personal-space base.
+    /// </summary>
     public override AgentAction Decide(AgentObservation observation)
     {
         ObserveHerdingIntrusions(observation);

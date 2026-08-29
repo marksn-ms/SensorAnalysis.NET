@@ -13,20 +13,19 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public class OrbitingCoopAgent : Agent
 {
-    private readonly Random _rng;
     /// <summary>Ticks since last incident status broadcast (for cooldown).</summary>
     protected int TicksSinceReport;
     private AgentAction _exploreHeading = AgentAction.Stay;
     private int _explorePersist;
     /// <summary>Local hypothesis id currently being orbited (null if none). Not a world incident id.</summary>
     protected int? CommittedIncidentId;
-    /// <summary>Incident position currently being orbited (last estimate).</summary>
+    /// <summary>Incident position currently being orbited (last estimate, absolute world coords).</summary>
     protected Vec2 CommittedPosition;
     /// <summary>Whether an orbit-confirmed radio call has been sent for the current commitment.</summary>
     protected bool OrbitAnnounced;
     /// <summary>Incident reports overheard (agent id, claimed id) — legacy pairing for subclasses.</summary>
     protected readonly HashSet<(int AgentId, int IncidentId)> HeardReports = new();
-    /// <summary>Claimed locations overheard this commitment (spatial; ids are untrusted).</summary>
+    /// <summary>Claimed locations overheard this commitment (observer-relative; ids are untrusted).</summary>
     protected readonly List<(int AgentId, Vec2 Position)> HeardClaims = new();
     /// <summary>Ticks remaining before another switch/break is allowed.</summary>
     protected int SwitchCooldownRemaining;
@@ -40,23 +39,14 @@ public class OrbitingCoopAgent : Agent
     public int? CommittedTrackId => CommittedIncidentId;
 
     /// <summary>Creates an orbiting cooperative agent.</summary>
-    public OrbitingCoopAgent(int? seed = null)
+    public OrbitingCoopAgent()
     {
         AgentType = "OrbitingCoop";
-        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
-        StepSize = 5;
-        FilterToAddressedTraffic = true;
+        Velocity = 5;
         ContributesToIncidentDrain = true;
+        ActionIntervalBase = 10;
+        MessageEchoTtl = 40;
     }
-
-    /// <summary>Protected RNG for subclasses.</summary>
-    protected Random Rng => _rng;
-
-    /// <summary>Status rebroadcast cooldown while monitoring.</summary>
-    public int ReportCooldown { get; set; } = 10;
-
-    /// <summary>World-echo TTL.</summary>
-    public int MessageEchoTtl { get; set; } = 40;
 
     /// <summary>How many nearer peers block a bird-in-hand join (default 2 ⇒ up to 3 orbiters).</summary>
     public int MaxOthersCloserToJoin { get; set; } = 2;
@@ -73,9 +63,12 @@ public class OrbitingCoopAgent : Agent
     /// <summary>Ticks to wait after a switch/break before switching again (anti-thrash).</summary>
     public int SwitchCooldownTicks { get; set; } = 12;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Updates hypotheses, commitments, orbit/status broadcasts, and movement for one tick.
+    /// </summary>
     public override void Tick(WorldContext ctx)
     {
+        BindContext(ctx);
         var observation = ctx.World.Observe(this);
         Hypotheses.AssociationRadius = Math.Max(12, SensorRange * 0.35);
 
@@ -101,7 +94,7 @@ public class OrbitingCoopAgent : Agent
 
         var personalSpace = SensorRange * 0.5;
         LastAction = ChooseAction(observation, personalSpace);
-        Position = ctx.World.Wrap(Position + LastAction.ToStep() * StepSize);
+        Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
     }
 
@@ -118,12 +111,10 @@ public class OrbitingCoopAgent : Agent
     /// <summary>Fold this tick's sensor cues into the hypothesis list.</summary>
     protected void IngestCues(AgentObservation observation)
     {
-        var w = observation.WorldWidth;
-        var h = observation.WorldHeight;
         foreach (var cue in observation.NearbyIncidents)
         {
             var strength = cue.Strength > 0 ? cue.Strength : 0.5;
-            Hypotheses.IngestCue(cue.Position, strength, w, h);
+            Hypotheses.IngestCue(cue.Position, strength, observation);
         }
     }
 
@@ -132,10 +123,11 @@ public class OrbitingCoopAgent : Agent
     {
         foreach (var msg in observation.NearbyMessages)
         {
-            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimed))
+            if (!RadioNet.TryParseClaim(msg.Payload, out var kind, out var iid, out var claimedAbsolute))
                 continue;
             if (kind == RadioClaimKind.Break)
                 continue;
+            var claimed = observation.RelativeFromAbsolute(claimedAbsolute);
             if (!ShouldFollowReport(msg, claimed))
                 continue;
 
@@ -155,8 +147,7 @@ public class OrbitingCoopAgent : Agent
             Hypotheses.IngestRumor(
                 claimed,
                 msg.FromAgentId,
-                observation.WorldWidth,
-                observation.WorldHeight,
+                observation,
                 RumorTrustWeight(msg));
         }
     }
@@ -181,7 +172,7 @@ public class OrbitingCoopAgent : Agent
 
         var orbitRadius = SensorRange * 0.5;
         var stationRadius = orbitRadius * 1.2;
-        var center = ResolveCommittedCenter(observation);
+        var center = RelativeCommittedCenter(observation);
         var onStation = CountAgentsNear(observation, center, stationRadius);
         var total = onStation + 1;
 
@@ -190,8 +181,7 @@ public class OrbitingCoopAgent : Agent
         if (!overcrowded && total >= 2)
         {
             var nearestPeer = observation.NearbyAgents
-                .Where(a => Vec2.ToroidalDistance(
-                    a.Position, center, observation.WorldWidth, observation.WorldHeight) <= stationRadius)
+                .Where(a => observation.DistanceBetween(a.Position, center) <= stationRadius)
                 .Select(a => observation.DistanceTo(a.Position))
                 .DefaultIfEmpty(double.MaxValue)
                 .Min();
@@ -214,7 +204,8 @@ public class OrbitingCoopAgent : Agent
         var current = Hypotheses.Get(currentId);
         if (current is null) return;
 
-        var currentEngagement = CountOthersCloser(observation, current.Estimate);
+        var currentEngagement = CountOthersCloser(
+            observation, observation.RelativeFromAbsolute(current.Estimate));
 
         EventHypothesis? best = null;
         var bestEngagement = int.MaxValue;
@@ -222,7 +213,7 @@ public class OrbitingCoopAgent : Agent
         {
             if (h.LocalId == currentId) continue;
             if (h.Confidence < Hypotheses.SuspectThreshold) continue;
-            var eng = CountOthersCloser(observation, h.Estimate);
+            var eng = CountOthersCloser(observation, observation.RelativeFromAbsolute(h.Estimate));
             if (eng >= MaxOthersCloserToJoin) continue;
             if (eng >= bestEngagement) continue;
             bestEngagement = eng;
@@ -232,7 +223,7 @@ public class OrbitingCoopAgent : Agent
         if (best is null) return;
         if (currentEngagement - bestEngagement < SwitchAdvantage) return;
 
-        SwitchTo(ctx, best, announceContact: true, reportSenderId: best.LastInformantId);
+        SwitchTo(ctx, observation, best, announceContact: true, reportSenderId: best.LastInformantId);
     }
 
     /// <summary>Commit to the strongest plausible hypothesis when free.</summary>
@@ -245,7 +236,8 @@ public class OrbitingCoopAgent : Agent
         {
             if (h.Confidence < Hypotheses.SuspectThreshold)
                 continue;
-            if (CountOthersCloser(observation, h.Estimate) >= MaxOthersCloserToJoin)
+            var targetRelative = observation.RelativeFromAbsolute(h.Estimate);
+            if (CountOthersCloser(observation, targetRelative) >= MaxOthersCloserToJoin)
                 continue;
 
             Commit(ctx, h, announceContact: true);
@@ -259,7 +251,7 @@ public class OrbitingCoopAgent : Agent
                     ToAgentId: null,
                     Payload: RadioNet.FormatContact(h.LocalId, h.Estimate),
                     TtlRemaining: MessageEchoTtl);
-                OnFollowedReport(synthetic, h.Estimate, h.LocalId);
+                OnFollowedReport(synthetic, targetRelative, h.LocalId);
             }
 
             return;
@@ -277,10 +269,10 @@ public class OrbitingCoopAgent : Agent
     }
 
     /// <summary>Honest agents trust all incident reports.</summary>
-    protected virtual bool ShouldFollowReport(MessageInfo msg, Vec2 claimed) => true;
+    protected virtual bool ShouldFollowReport(MessageInfo msg, Vec2 claimedRelative) => true;
 
     /// <summary>Hook for mitigated agents to start a verification probe after following a report.</summary>
-    protected virtual void OnFollowedReport(MessageInfo msg, Vec2 claimed, int incidentId)
+    protected virtual void OnFollowedReport(MessageInfo msg, Vec2 claimedRelative, int incidentId)
     {
     }
 
@@ -294,7 +286,7 @@ public class OrbitingCoopAgent : Agent
         if (track is null) return;
 
         var orbitRadius = SensorRange * 0.5;
-        var target = ResolveCommittedCenter(observation);
+        var target = RelativeCommittedCenter(observation);
         if (observation.DistanceTo(target) > orbitRadius * 1.15)
             return;
 
@@ -303,7 +295,7 @@ public class OrbitingCoopAgent : Agent
         if (!confident && !cued)
             return;
 
-        CommittedPosition = target;
+        CommittedPosition = track.Estimate;
         ctx.World.Transmit(this, RadioNet.FormatOrbit(id, CommittedPosition), MessageEchoTtl);
         OrbitAnnounced = true;
         HeardReports.Add((Id, id));
@@ -314,19 +306,19 @@ public class OrbitingCoopAgent : Agent
     protected virtual void MaybeBroadcastStatus(WorldContext ctx, AgentObservation observation)
     {
         TicksSinceReport++;
-        if (CommittedIncidentId is not int id || TicksSinceReport < ReportCooldown)
+        if (CommittedIncidentId is not int id || TicksSinceReport < ActionInterval)
             return;
         var track = Hypotheses.Get(id);
         if (track is null)
             return;
 
-        var target = ResolveCommittedCenter(observation);
-        if (!AnyCueNear(observation, target, SensorRange * 0.6) &&
+        var targetRelative = RelativeCommittedCenter(observation);
+        if (!AnyCueNear(observation, targetRelative, SensorRange * 0.6) &&
             track.LastSource != HypothesisSource.Sensor)
             return;
 
-        CommittedPosition = target;
-        ctx.World.Transmit(this, IncidentMarker.Format(id, target), MessageEchoTtl);
+        CommittedPosition = track.Estimate;
+        ctx.World.Transmit(this, IncidentMarker.Format(id, CommittedPosition), MessageEchoTtl);
         HeardReports.Add((Id, id));
         TicksSinceReport = 0;
     }
@@ -337,27 +329,25 @@ public class OrbitingCoopAgent : Agent
         if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
             var orbitRadius = SensorRange * 0.5;
-            var target = ResolveCommittedCenter(observation);
+            var target = RelativeCommittedCenter(observation);
             var dist = observation.DistanceTo(target);
             if (track.Confidence >= Hypotheses.OrbitThreshold || dist <= orbitRadius * 1.2)
             {
-                return Steering.OrbitClockwise(
-                    observation.SelfPosition, target, orbitRadius,
-                    observation.WorldWidth, observation.WorldHeight);
+                return Steering.OrbitClockwise(target, orbitRadius, observation);
             }
 
             return Steering.DirectionToward(observation.DisplacementTo(target));
         }
 
         return Steering.ExploreWithPersonalSpace(
-            observation.SelfPosition,
             _exploreHeading,
             _explorePersist,
             observation.NearbyAgents,
             personalSpace,
-            observation.WorldWidth,
-            observation.WorldHeight,
-            _rng,
+            Velocity,
+            observation,
+            Rng,
+            HeadingChangeInterval,
             out _exploreHeading,
             out _explorePersist);
     }
@@ -368,7 +358,7 @@ public class OrbitingCoopAgent : Agent
         CommittedIncidentId = track.LocalId;
         CommittedPosition = track.Estimate;
         OrbitAnnounced = false;
-        TicksSinceReport = ReportCooldown;
+        TicksSinceReport = ActionInterval;
         if (announceContact)
         {
             ctx.World.Transmit(this, RadioNet.FormatContact(track.LocalId, track.Estimate), MessageEchoTtl);
@@ -380,6 +370,7 @@ public class OrbitingCoopAgent : Agent
     /// <summary>Break current commitment (if any) and commit to a new hypothesis.</summary>
     protected void SwitchTo(
         WorldContext ctx,
+        AgentObservation observation,
         EventHypothesis track,
         bool announceContact,
         int? reportSenderId)
@@ -392,6 +383,7 @@ public class OrbitingCoopAgent : Agent
 
         if (reportSenderId is int sid)
         {
+            var targetRelative = observation.RelativeFromAbsolute(track.Estimate);
             var synthetic = new MessageInfo(
                 Id: -1,
                 Position: track.Estimate,
@@ -400,7 +392,7 @@ public class OrbitingCoopAgent : Agent
                 ToAgentId: null,
                 Payload: RadioNet.FormatContact(track.LocalId, track.Estimate),
                 TtlRemaining: MessageEchoTtl);
-            OnFollowedReport(synthetic, track.Estimate, track.LocalId);
+            OnFollowedReport(synthetic, targetRelative, track.LocalId);
         }
     }
 
@@ -413,68 +405,76 @@ public class OrbitingCoopAgent : Agent
         ctx.World.Transmit(this, RadioNet.FormatBreak(incidentId), MessageEchoTtl);
     }
 
-    /// <summary>Last estimate of the current commitment, nudged by a nearby cue if any.</summary>
-    protected Vec2 ResolveCommittedCenter(AgentObservation observation)
+    /// <summary>Last estimate of the current commitment in observer-relative coords, nudged by a nearby cue if any.</summary>
+    protected Vec2 RelativeCommittedCenter(AgentObservation observation)
     {
         if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
-            var near = NearestCue(observation, track.Estimate, SensorRange * 0.5);
-            if (near is { } cue)
+            var centerRelative = observation.RelativeFromAbsolute(track.Estimate);
+            var near = NearestCue(observation, centerRelative, SensorRange * 0.5);
+            if (near is { } cueRelative)
             {
-                track.Estimate = cue;
-                CommittedPosition = cue;
-                return cue;
+                track.Estimate = observation.AbsoluteFromRelative(cueRelative);
+                CommittedPosition = track.Estimate;
+                return cueRelative;
             }
 
             CommittedPosition = track.Estimate;
-            return track.Estimate;
+            return centerRelative;
         }
 
-        return CommittedPosition;
+        return observation.RelativeFromAbsolute(CommittedPosition);
     }
 
-    /// <summary>Peers closer to <paramref name="target"/> than self (bird-in-hand engagement).</summary>
-    protected static int CountOthersCloser(AgentObservation observation, Vec2 target)
+    /// <summary>Absolute last estimate of the current commitment (for subclasses).</summary>
+    protected Vec2 ResolveCommittedCenter(AgentObservation observation)
     {
-        var selfDist = observation.DistanceTo(target);
-        return observation.NearbyAgents.Count(a =>
-            Vec2.ToroidalDistance(a.Position, target, observation.WorldWidth, observation.WorldHeight) + 1e-6 <
-            selfDist);
+        var relative = RelativeCommittedCenter(observation);
+        return CommittedIncidentId is not null
+            ? CommittedPosition
+            : observation.AbsoluteFromRelative(relative);
     }
 
-    /// <summary>Peers within <paramref name="radius"/> of <paramref name="center"/>.</summary>
-    protected static int CountAgentsNear(AgentObservation observation, Vec2 center, double radius) =>
+    /// <summary>Peers closer to <paramref name="targetRelative"/> than self (bird-in-hand engagement).</summary>
+    protected static int CountOthersCloser(AgentObservation observation, Vec2 targetRelative)
+    {
+        var selfDist = observation.DistanceTo(targetRelative);
+        return observation.NearbyAgents.Count(a =>
+            observation.DistanceBetween(a.Position, targetRelative) + 1e-6 < selfDist);
+    }
+
+    /// <summary>Peers within <paramref name="radius"/> of <paramref name="centerRelative"/>.</summary>
+    protected static int CountAgentsNear(AgentObservation observation, Vec2 centerRelative, double radius) =>
         observation.NearbyAgents.Count(a =>
-            Vec2.ToroidalDistance(a.Position, center, observation.WorldWidth, observation.WorldHeight) <= radius);
+            observation.DistanceBetween(a.Position, centerRelative) <= radius);
 
     /// <summary>
     /// True when self is not among the <see cref="MaxOrbiters"/> closest agents to the event
     /// (so we should yield the station).
     /// </summary>
-    protected bool ShouldYieldStation(AgentObservation observation, Vec2 center, double stationRadius)
+    protected bool ShouldYieldStation(AgentObservation observation, Vec2 centerRelative, double stationRadius)
     {
-        var selfDist = observation.DistanceTo(center);
+        var selfDist = observation.DistanceTo(centerRelative);
         var closerOrEqualPeers = observation.NearbyAgents.Count(a =>
         {
-            var d = Vec2.ToroidalDistance(a.Position, center, observation.WorldWidth, observation.WorldHeight);
+            var d = observation.DistanceBetween(a.Position, centerRelative);
             return d <= stationRadius && d <= selfDist + 1e-6;
         });
         return closerOrEqualPeers + 1 > MaxOrbiters;
     }
 
-    /// <summary>True when a cue this tick lands near <paramref name="center"/>.</summary>
-    protected static bool AnyCueNear(AgentObservation observation, Vec2 center, double radius) =>
+    /// <summary>True when a cue this tick lands near <paramref name="centerRelative"/>.</summary>
+    protected static bool AnyCueNear(AgentObservation observation, Vec2 centerRelative, double radius) =>
         observation.NearbyIncidents.Any(c =>
-            Vec2.ToroidalDistance(c.Position, center, observation.WorldWidth, observation.WorldHeight) <= radius);
+            observation.DistanceBetween(c.Position, centerRelative) <= radius);
 
-    private static Vec2? NearestCue(AgentObservation observation, Vec2 center, double radius)
+    private static Vec2? NearestCue(AgentObservation observation, Vec2 centerRelative, double radius)
     {
         Vec2? best = null;
         var bestD = double.PositiveInfinity;
         foreach (var c in observation.NearbyIncidents)
         {
-            var d = Vec2.ToroidalDistance(
-                c.Position, center, observation.WorldWidth, observation.WorldHeight);
+            var d = observation.DistanceBetween(c.Position, centerRelative);
             if (d <= radius && d < bestD)
             {
                 bestD = d;

@@ -4,4 +4,7 @@
     <RootNamespace>SensorAnalysis.Sphere.Core</RootNamespace>
     <Description>Geodesic spherical simulation primitives for SensorAnalysis.</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SensorAnalysis.Sphere.Core.Tests" />
+  </ItemGroup>
 </Project>

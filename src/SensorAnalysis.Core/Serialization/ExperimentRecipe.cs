@@ -85,7 +85,7 @@ public sealed class ExperimentRecipe
     },
     {
       "atTick": 0,
-      "deployer": "PeriodicIncidents",
+      "deployer": "Periodic",
       "salt": 0,
       "parameters": {
         "PeriodTicks": 25,
@@ -180,7 +180,7 @@ public sealed class RecipeDirective
     /// <summary>World tick at which to attach (0 = before the first agent step).</summary>
     public long AtTick { get; set; }
 
-    /// <summary>Registered deployer name (Gaussian, Random, PeriodicIncidents, PlaceNear, …).</summary>
+    /// <summary>Registered deployer name (Uniform, Gaussian, Periodic, PlaceNear, …). Legacy names (Random, UniformIncidents, PeriodicIncidents) are accepted when loading recipes.</summary>
     public string Deployer { get; set; } = "Gaussian";
 
     /// <summary>RNG salt mixed into that deployer (0 matches CLI/GUI default).</summary>
@@ -244,18 +244,21 @@ public static class RecipeCompiler
         {
             if (string.IsNullOrWhiteSpace(d.Deployer))
                 throw new InvalidOperationException("Recipe directive is missing a deployer name.");
-            if (!deployers.TryGetValue(d.Deployer, out var factory))
+            if (!DeployerRecipeCompat.TryResolveFactory(d.Deployer, deployers, out var factory))
             {
                 throw new InvalidOperationException(
                     $"Unknown deployer '{d.Deployer}'. Available: {string.Join(", ", deployers.Keys)}");
             }
 
             var sample = factory();
-            var options = DeployerParameterCatalog.Materialize(sample.OptionsType, d.Parameters);
+            var normalized = DeployerRecipeCompat.NormalizeParameters(
+                d.Deployer, sample.OptionsType, d.Parameters);
+            var options = DeployerParameterCatalog.Materialize(sample.OptionsType, normalized);
             steps.Add(new DeployStep
             {
                 CreateDeployer = factory,
                 Options = options,
+                Parameters = normalized,
                 AtTick = d.AtTick,
                 RandomSalt = d.Salt
             });

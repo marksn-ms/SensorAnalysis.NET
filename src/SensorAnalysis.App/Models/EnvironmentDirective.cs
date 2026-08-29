@@ -5,29 +5,36 @@ using SensorAnalysis.Core.Deployment;
 namespace SensorAnalysis.App.Models;
 
 /// <summary>
-/// One editable field in the directive draft, bound from a deployer options property.
+/// One editable field in the directive draft (deployer or deployable parameter).
 /// </summary>
 public partial class DirectiveParameterField : ObservableObject
 {
     /// <summary>Creates a field from catalog metadata and a current value.</summary>
-    /// <param name="info">Deployer parameter descriptor.</param>
-    /// <param name="value">Current / default property value.</param>
-    /// <param name="agentTypes">Registered agent factory names for agent-type combos.</param>
-    /// <param name="incidentTypes">Known incident type names for incident-type combos.</param>
+    /// <param name="name">Options property name.</param>
+    /// <param name="label">UI label.</param>
+    /// <param name="required">Whether empty values block Add.</param>
+    /// <param name="description">Tooltip / help text.</param>
+    /// <param name="propertyType">CLR type of the underlying property.</param>
+    /// <param name="value">Current or default value.</param>
+    /// <param name="choiceValues">Combo choices when applicable.</param>
+    /// <param name="isDeployableType">True when this field selects a deployable type name.</param>
     public DirectiveParameterField(
-        DeployerParameterInfo info,
+        string name,
+        string label,
+        bool required,
+        string description,
+        Type propertyType,
         object? value,
-        IReadOnlyList<string> agentTypes,
-        IReadOnlyList<string> incidentTypes)
+        IReadOnlyList<string>? choiceValues = null,
+        bool isDeployableType = false)
     {
-        Name = info.Name;
-        Label = info.Label;
-        Required = info.Required;
-        Description = info.Description ?? "";
-        IsAgentType = info.IsAgentType;
-        IsIncidentType = info.IsIncidentType;
-        PropertyType = info.PropertyType;
-        ChoiceValues = IsIncidentType ? incidentTypes : agentTypes;
+        Name = name;
+        Label = label;
+        Required = required;
+        Description = description;
+        PropertyType = propertyType;
+        IsDeployableType = isDeployableType;
+        ChoiceValues = choiceValues ?? Array.Empty<string>();
         SetValueFromObject(value);
     }
 
@@ -43,36 +50,26 @@ public partial class DirectiveParameterField : ObservableObject
     /// <summary>Tooltip / help.</summary>
     public string Description { get; }
 
-    /// <summary>True when this field picks an agent factory name.</summary>
-    public bool IsAgentType { get; }
-
-    /// <summary>True when this field picks an incident type name.</summary>
-    public bool IsIncidentType { get; }
+    /// <summary>True when this field selects a deployable type name.</summary>
+    public bool IsDeployableType { get; }
 
     /// <summary>CLR type of the underlying property.</summary>
     public Type PropertyType { get; }
 
-    /// <summary>
-    /// Combo choices when <see cref="IsChoiceCombo"/> — agent types or incident types.
-    /// </summary>
+    /// <summary>Combo choices when <see cref="IsChoiceCombo"/>.</summary>
     public IReadOnlyList<string> ChoiceValues { get; }
 
     /// <summary>True when the control should be a checkbox.</summary>
     public bool IsBool => PropertyType == typeof(bool);
 
-    /// <summary>True when the control should be an agent- or incident-type combo.</summary>
-    public bool IsChoiceCombo => IsAgentType || IsIncidentType;
+    /// <summary>True when the control should be a combo.</summary>
+    public bool IsChoiceCombo => IsDeployableType || ChoiceValues.Count > 0;
 
     /// <summary>True when the control should be a free-text / numeric box.</summary>
     public bool IsText => !IsBool && !IsChoiceCombo;
 
-    /// <summary>String form used by text boxes.</summary>
     [ObservableProperty] private string _textValue = "";
-
-    /// <summary>Bool form used by checkboxes.</summary>
     [ObservableProperty] private bool _boolValue;
-
-    /// <summary>Selected combo value when <see cref="IsChoiceCombo"/>.</summary>
     [ObservableProperty] private string _choiceValue = "";
 
     /// <summary>Whether the current value satisfies required/parse rules.</summary>
@@ -98,7 +95,8 @@ public partial class DirectiveParameterField : ObservableObject
         }
     }
 
-    /// <summary>Boxed value suitable for <see cref="DeployerParameterCatalog.Materialize"/>.</summary>
+    /// <summary>Boxed value suitable for directive parameter storage.</summary>
+    /// <returns>Property value in a type suitable for serialization.</returns>
     public object? GetBoxedValue()
     {
         if (IsBool) return BoolValue;
@@ -161,7 +159,7 @@ public partial class EnvironmentDirective : ObservableObject
     /// <summary>RNG salt mixed into the deployer (0 is the shared CLI/GUI default).</summary>
     public int Salt { get; set; }
 
-    /// <summary>Captured options property values.</summary>
+    /// <summary>Captured deployer and deployable parameter values.</summary>
     public Dictionary<string, object?> Parameters { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>True after the directive has been executed in the current world session.</summary>

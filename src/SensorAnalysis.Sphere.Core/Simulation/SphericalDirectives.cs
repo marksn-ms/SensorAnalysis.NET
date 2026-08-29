@@ -17,6 +17,7 @@ public enum SphericalDirectiveKind
 }
 
 /// <summary>A tick-scheduled world modification configured from the App deployment panel.</summary>
+/// <param name="StepSize">Optional step distance; TODO: rename to <c>Velocity</c> for parity with flat agents.</param>
 public sealed record SphericalDirective(
     long Tick,
     SphericalDirectiveKind Kind,

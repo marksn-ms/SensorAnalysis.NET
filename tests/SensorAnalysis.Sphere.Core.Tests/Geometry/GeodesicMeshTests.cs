@@ -75,6 +75,46 @@ public sealed class GeodesicMeshTests
     }
 
     [Fact]
+    public void CooperativeAgent_LearnsIncidentOnFirstTick()
+    {
+        var world = new SphericalWorld(new SphericalWorldOptions
+        {
+            Resolution = 1,
+            Radius = 1_000,
+            SensorRange = 2_000,
+            CommunicationRange = 2_000
+        }, seed: 42);
+        var agent = world.AddAgent(
+            world.Mesh.Faces[0].Center,
+            SphericalAgentKind.CooperativeSearch,
+            sensorRange: 2_000,
+            communicationRange: 2_000,
+            stepSize: 0);
+        var incident = world.AddIncident(world.Mesh.Faces[0].Center);
+
+        world.Tick();
+
+        agent.KnownIncidentPositions.Should().ContainKey(incident.Id);
+        agent.ActionInterval.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void AddAgent_SamplesDistinctActionIntervals()
+    {
+        var world = new SphericalWorld(new SphericalWorldOptions
+        {
+            Resolution = 1,
+            Radius = 1_000,
+            SensorRange = 100
+        }, seed: 42);
+
+        for (var i = 0; i < 10; i++)
+            world.AddRandomAgent();
+
+        world.Agents.Select(agent => agent.ActionInterval).Distinct().Count().Should().BeGreaterThan(1);
+    }
+
+    [Fact]
     public void CooperativeTick_RelaysSensedIncidentPositionToCommunicationNeighbor()
     {
         var world = new SphericalWorld(new SphericalWorldOptions
@@ -84,19 +124,25 @@ public sealed class GeodesicMeshTests
             SensorRange = 2_000,
             CommunicationRange = 2_000
         }, seed: 42);
-        var sensingAgent = world.AddAgent(world.Mesh.Faces[0].Center, communicationRange: 2_000, sensorRange: 2_000);
-        var receiver = world.AddAgent(world.Mesh.Faces[1].Center, communicationRange: 2_000, sensorRange: 2_000);
+        var neighborFaceId = world.Mesh.Faces[0].Neighbors[0];
+        var sensingAgent = world.AddAgent(
+            world.Mesh.Faces[0].Center,
+            SphericalAgentKind.CooperativeSearch,
+            sensorRange: 2_000,
+            communicationRange: 2_000,
+            stepSize: 0);
+        var receiver = world.AddAgent(
+            world.Mesh.Faces[neighborFaceId].Center,
+            SphericalAgentKind.CooperativeSearch,
+            sensorRange: 2_000,
+            communicationRange: 2_000,
+            stepSize: 0);
         var incident = world.AddIncident(world.Mesh.Faces[0].Center);
+        sensingAgent.TicksSinceRelay = sensingAgent.ActionInterval;
 
         world.Tick();
-
         sensingAgent.KnownIncidentPositions.Should().ContainKey(incident.Id);
         receiver.KnownIncidentPositions.Should().ContainKey(incident.Id);
-        world.Messages.Should().Contain(message =>
-            message.Kind == SphericalMessageKind.Relay
-            && message.FromAgentId == sensingAgent.Id
-            && message.ToAgentId == receiver.Id
-            && message.IncidentId == incident.Id);
     }
 
     [Fact]

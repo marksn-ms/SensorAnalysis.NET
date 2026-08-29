@@ -33,6 +33,7 @@ public partial class MainViewModel : ObservableObject
 {
     private readonly Core.World.SimulationRunner _runner = new();
     private readonly AgentFactoryRegistry _factories;
+    private readonly DeployableRegistry _deployables;
     private readonly Dictionary<string, Func<IDeployer>> _deployerFactories;
     private readonly DispatcherTimer _runTimer;
     private readonly CoverageWatcher _coverageWatcher = new(sampleEveryTicks: 1);
@@ -69,11 +70,17 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel()
     {
         _factories = BuiltinCatalog.CreateAgents();
+        _deployables = BuiltinCatalog.CreateDeployables();
         _deployerFactories = BuiltinCatalog.CreateDeployers();
 
-        AgentTypeNames = new ObservableCollection<string>(_factories.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
-        IncidentTypeNames = new ObservableCollection<string>(new[] { "Incident", "Hotspot", "Distress" });
-        DeployerNames = new ObservableCollection<string>(_deployerFactories.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+        DeployableTypeNames = new ObservableCollection<string>(
+            _deployables.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+        DeployerNames = new ObservableCollection<string>(
+            _deployerFactories
+                .Select(kv => (Key: kv.Key, Name: kv.Value().Name))
+                .Where(x => string.Equals(x.Key, x.Name, StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Name)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
 
         _runner.AddWatcher(_coverageWatcher);
         _runner.AddWatcher(_connectivityWatcher);
@@ -114,11 +121,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _draftDeployerName = "Gaussian";
     [ObservableProperty] private string _draftValidationMessage = "";
 
-    /// <summary>Available agent factory names.</summary>
-    public ObservableCollection<string> AgentTypeNames { get; }
-
-    /// <summary>Known incident type names for directive combos.</summary>
-    public ObservableCollection<string> IncidentTypeNames { get; }
+    /// <summary>Registered deployable type names (single list for all deployer type pickers).</summary>
+    public ObservableCollection<string> DeployableTypeNames { get; }
 
     /// <summary>Available deployer names.</summary>
     public ObservableCollection<string> DeployerNames { get; }
@@ -245,7 +249,8 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanAddDirective))]
     private void AddDirective()
     {
-        if (!TryBuildDraftOptions(out var options, out var error))
+        var parameters = DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal);
+        if (!TryBuildDraftOptions(parameters, out var options, out var error))
         {
             DraftValidationMessage = error ?? "Invalid parameters.";
             return;
@@ -255,7 +260,7 @@ public partial class MainViewModel : ObservableObject
         {
             AtTick = DraftAtTick,
             DeployerName = DraftDeployerName,
-            Parameters = DeployerParameterCatalog.Capture(options)
+            Parameters = parameters
         };
         Directives.Add(d);
         SelectedDirective = d;
@@ -266,8 +271,14 @@ public partial class MainViewModel : ObservableObject
     private bool CanAddDirective() =>
         _deployerFactories.ContainsKey(DraftDeployerName) &&
         DraftFields.All(f => f.IsValid) &&
-        TryBuildDraftOptions(out var options, out _) &&
-        DeployerParameterCatalog.TryValidate(options, out _);
+        TryBuildDraftOptions(
+            DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal),
+            out _,
+            out _) &&
+        ValidateDraftDeployableParams(out _) &&
+        ValidatePlaceNearAnchor(
+            DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal),
+            out _);
 
     /// <summary>Remove the selected directive from the log.</summary>
     [RelayCommand]
@@ -775,12 +786,12 @@ public partial class MainViewModel : ObservableObject
         if (_runner.World is null) return false;
         try
         {
-            if (!_deployerFactories.ContainsKey(d.DeployerName))
+            if (!DeployerRecipeCompat.TryResolveFactory(d.DeployerName, _deployerFactories, out _))
                 throw new InvalidOperationException($"Unknown deployer '{d.DeployerName}'.");
 
             var salt = d.Salt;
             var step = ToDeployStep(d);
-            _runner.AttachDeployer(step, CreateDeployContext(salt));
+            _runner.AttachDeployer(step, CreateDeployContext(salt, d.Parameters));
             d.IsApplied = true;
             d.Status = "applied";
             return true;
@@ -795,27 +806,37 @@ public partial class MainViewModel : ObservableObject
 
     private DeployStep ToDeployStep(EnvironmentDirective d)
     {
-        if (!_deployerFactories.TryGetValue(d.DeployerName, out var factory))
+        if (!DeployerRecipeCompat.TryResolveFactory(d.DeployerName, _deployerFactories, out var factory))
             throw new InvalidOperationException($"Unknown deployer '{d.DeployerName}'.");
         var prototype = factory();
-        var options = DeployerParameterCatalog.Materialize(prototype.OptionsType, d.Parameters);
+        var normalized = DeployerRecipeCompat.NormalizeParameters(
+            d.DeployerName, prototype.OptionsType, d.Parameters);
+        var options = DeployerParameterCatalog.Materialize(prototype.OptionsType, normalized);
         return new DeployStep
         {
             CreateDeployer = factory,
             Options = options,
+            Parameters = normalized,
             AtTick = d.AtTick,
             RandomSalt = d.Salt
         };
     }
 
-    private DeployContext CreateDeployContext(int salt) => new()
+    private DeployContext CreateDeployContext(int salt, IReadOnlyDictionary<string, object?>? parameters = null) => new()
     {
-        RandomSalt = salt,
-        ResolveAgent = name => _factories.Get(name).Create()
+        Deployables = _deployables,
+        Parameters = parameters ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+        RandomSalt = salt
     };
 
-    private void RebuildDraftFields()
+    private void RebuildDraftFields(bool preserveValues = false)
     {
+        Dictionary<string, object?>? preserved = null;
+        if (preserveValues && DraftFields.Count > 0)
+        {
+            preserved = DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal);
+        }
+
         foreach (var f in DraftFields)
             f.PropertyChanged -= OnDraftFieldPropertyChanged;
         DraftFields.Clear();
@@ -823,19 +844,83 @@ public partial class MainViewModel : ObservableObject
         if (!_deployerFactories.TryGetValue(DraftDeployerName, out var factory))
             return;
 
-        var options = factory().CreateOptions();
-        foreach (var info in DeployerParameterCatalog.Describe(options.GetType()))
+        var allValues = preserved ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+        object options;
+        try
         {
-            var field = new DirectiveParameterField(info, info.Property.GetValue(options), AgentTypeNames, IncidentTypeNames);
+            options = DeployerParameterCatalog.Materialize(factory().OptionsType, allValues);
+        }
+        catch
+        {
+            options = factory().CreateOptions();
+        }
+
+        foreach (var info in DeployerParameterCatalog.Describe(options.GetType(), options))
+        {
+            var field = CreateField(info, info.Property.GetValue(options));
             field.PropertyChanged += OnDraftFieldPropertyChanged;
             DraftFields.Add(field);
+        }
+
+        var typeName = DeployerParameterCatalog.GetTypeName(options);
+        if (!string.IsNullOrWhiteSpace(typeName) &&
+            _deployables.Names.Any(n => string.Equals(n, typeName, StringComparison.OrdinalIgnoreCase)))
+        {
+            var deployableFactory = _deployables.Get(typeName);
+            foreach (var info in DeployableParameterCatalog.Describe(deployableFactory.ConfigType))
+            {
+                var value = allValues.TryGetValue(info.Name, out var raw)
+                    ? raw
+                    : info.Property.GetValue(Activator.CreateInstance(deployableFactory.ConfigType!)!);
+                var field = new DirectiveParameterField(
+                    info.Name,
+                    info.Label,
+                    info.Required,
+                    info.Description ?? "",
+                    info.PropertyType,
+                    value);
+                field.PropertyChanged += OnDraftFieldPropertyChanged;
+                DraftFields.Add(field);
+            }
         }
 
         RefreshDraftValidation();
     }
 
+    private DirectiveParameterField CreateField(DeployerParameterInfo info, object? value)
+    {
+        if (info.IsDeployableType)
+        {
+            return new DirectiveParameterField(
+                info.Name,
+                info.Label,
+                info.Required,
+                info.Description ?? "",
+                info.PropertyType,
+                value,
+                DeployableTypeNames,
+                isDeployableType: true);
+        }
+
+        return new DirectiveParameterField(
+            info.Name,
+            info.Label,
+            info.Required,
+            info.Description ?? "",
+            info.PropertyType,
+            value);
+    }
+
     private void OnDraftFieldPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (sender is DirectiveParameterField field &&
+            field.IsDeployableType &&
+            e.PropertyName is nameof(DirectiveParameterField.ChoiceValue))
+        {
+            RebuildDraftFields(preserveValues: true);
+            return;
+        }
+
         if (e.PropertyName is nameof(DirectiveParameterField.IsValid)
             or nameof(DirectiveParameterField.TextValue)
             or nameof(DirectiveParameterField.BoolValue)
@@ -848,18 +933,75 @@ public partial class MainViewModel : ObservableObject
 
     private void RefreshDraftValidation()
     {
-        if (!TryBuildDraftOptions(out var options, out var error))
+        var parameters = DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal);
+        if (!TryBuildDraftOptions(parameters, out var options, out var error))
         {
             DraftValidationMessage = error ?? "";
             return;
         }
 
-        DraftValidationMessage = DeployerParameterCatalog.TryValidate(options, out var err)
-            ? ""
-            : err ?? "";
+        if (!DeployerParameterCatalog.TryValidate(options, out var deployerErr))
+        {
+            DraftValidationMessage = deployerErr ?? "";
+            return;
+        }
+
+        DraftValidationMessage = ValidateDraftDeployableParams(parameters, out var deployableErr)
+            ? ValidatePlaceNearAnchor(parameters, out var anchorErr)
+                ? ""
+                : anchorErr ?? ""
+            : deployableErr ?? "";
     }
 
-    private bool TryBuildDraftOptions(out object options, out string? error)
+    private bool ValidatePlaceNearAnchor(IReadOnlyDictionary<string, object?> parameters, out string? error)
+    {
+        error = null;
+        if (!string.Equals(DraftDeployerName, "PlaceNear", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!parameters.TryGetValue("NearTypeName", out var nearRaw) || nearRaw is null)
+            return true;
+
+        var nearType = nearRaw.ToString();
+        if (string.IsNullOrWhiteSpace(nearType))
+            return true;
+
+        if (!_deployables.Names.Any(n => string.Equals(n, nearType, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = $"Unknown deployable type '{nearType}'.";
+            return false;
+        }
+
+        var factory = _deployables.Get(nearType);
+        if (DeployableCapabilities.SupportsNearAnchor(factory, out var reason))
+            return true;
+
+        error = reason;
+        return false;
+    }
+
+    private bool ValidateDraftDeployableParams(out string? error) =>
+        ValidateDraftDeployableParams(
+            DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal),
+            out error);
+
+    private bool ValidateDraftDeployableParams(IReadOnlyDictionary<string, object?> parameters, out string? error)
+    {
+        error = null;
+        if (!parameters.TryGetValue("TypeName", out var typeRaw) || typeRaw is null)
+            return true;
+        var typeName = typeRaw.ToString();
+        if (string.IsNullOrWhiteSpace(typeName) ||
+            !_deployables.Names.Any(n => string.Equals(n, typeName, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        var factory = _deployables.Get(typeName);
+        return DeployableParameterCatalog.TryValidate(factory.ConfigType, parameters, out error);
+    }
+
+    private bool TryBuildDraftOptions(
+        IReadOnlyDictionary<string, object?> parameters,
+        out object options,
+        out string? error)
     {
         options = null!;
         error = null;
@@ -880,8 +1022,7 @@ public partial class MainViewModel : ObservableObject
                 }
             }
 
-            var map = DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal);
-            options = DeployerParameterCatalog.Materialize(factory().OptionsType, map);
+            options = DeployerParameterCatalog.Materialize(factory().OptionsType, parameters);
             return true;
         }
         catch (Exception ex)
@@ -1140,21 +1281,23 @@ public partial class MainViewModel : ObservableObject
         {
             AtTick = 0,
             DeployerName = "Gaussian",
-            Parameters = DeployerParameterCatalog.Capture(new GaussianDeployOptions
+            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                Count = 10,
-                TypeName = "OrbitingCoop"
-            })
+                ["Count"] = 10,
+                ["TypeName"] = "OrbitingCoop",
+                ["SensorRange"] = 80.0
+            }
         });
         Directives.Add(new EnvironmentDirective
         {
             AtTick = 0,
-            DeployerName = "PeriodicIncidents",
-            Parameters = DeployerParameterCatalog.Capture(new PeriodicIncidentOptions
+            DeployerName = "Periodic",
+            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                PeriodTicks = 25,
-                Count = 1
-            })
+                ["PeriodTicks"] = 25,
+                ["Count"] = 1,
+                ["TypeName"] = "Incident"
+            }
         });
         SelectedDirective = Directives[0];
     }

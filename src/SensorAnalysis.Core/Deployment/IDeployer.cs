@@ -45,21 +45,3 @@ public interface IDeployer
     /// <param name="ctx">Current world context.</param>
     void Tick(WorldContext ctx);
 }
-
-/// <summary>
-/// Options for <see cref="PeriodicIncidentDeployer"/> (uniform incident waves).
-/// </summary>
-public sealed class PeriodicIncidentOptions
-{
-    /// <summary>Ticks between waves (including a wave at tick 0).</summary>
-    [DeployerParam("Period (ticks)", Description = "Spawn on ticks 0, N, 2N, …")]
-    public int PeriodTicks { get; set; } = 25;
-
-    /// <summary>Incidents created each wave.</summary>
-    [DeployerParam("Count")]
-    public int Count { get; set; } = 1;
-
-    /// <summary>Logical incident kind for styling / filtering (default <c>Incident</c>).</summary>
-    [DeployerParam("Incident type", IsIncidentType = true, Required = false)]
-    public string IncidentType { get; set; } = "Incident";
-}
