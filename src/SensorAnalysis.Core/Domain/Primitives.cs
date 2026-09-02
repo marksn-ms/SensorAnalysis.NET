@@ -97,7 +97,7 @@ public readonly record struct GridSize(int Width, int Height)
     public int Area => Width * Height;
 }
 
-/// <summary>Discrete movement / action choices (no-inertia model, matching the classic platform).</summary>
+/// <summary>Discrete movement / action choices (16 compass points plus stay).</summary>
 public enum AgentAction
 {
     /// <summary>Remain in place.</summary>
@@ -106,44 +106,109 @@ public enum AgentAction
     /// <summary>Move north (negative Y).</summary>
     North,
 
+    /// <summary>Move north-northeast (22.5° east of north).</summary>
+    NorthNorthEast,
+
     /// <summary>Move northeast.</summary>
     NorthEast,
+
+    /// <summary>Move east-northeast (22.5° north of east).</summary>
+    EastNorthEast,
 
     /// <summary>Move east (positive X).</summary>
     East,
 
+    /// <summary>Move east-southeast (22.5° south of east).</summary>
+    EastSouthEast,
+
     /// <summary>Move southeast.</summary>
     SouthEast,
+
+    /// <summary>Move south-southeast (22.5° east of south).</summary>
+    SouthSouthEast,
 
     /// <summary>Move south (positive Y).</summary>
     South,
 
+    /// <summary>Move south-southwest (22.5° west of south).</summary>
+    SouthSouthWest,
+
     /// <summary>Move southwest.</summary>
     SouthWest,
+
+    /// <summary>Move west-southwest (22.5° south of west).</summary>
+    WestSouthWest,
 
     /// <summary>Move west (negative X).</summary>
     West,
 
+    /// <summary>Move west-northwest (22.5° north of west).</summary>
+    WestNorthWest,
+
     /// <summary>Move northwest.</summary>
-    NorthWest
+    NorthWest,
+
+    /// <summary>Move north-northwest (22.5° west of north).</summary>
+    NorthNorthWest
 }
 
-/// <summary>Converts <see cref="AgentAction"/> to a unit step vector.</summary>
+/// <summary>Converts <see cref="AgentAction"/> to movement vectors and compass helpers.</summary>
 public static class AgentActionExtensions
 {
-    /// <summary>Maps an action to an 8-connected unit step (or zero for <see cref="AgentAction.Stay"/>).</summary>
+    /// <summary>Sixteen movement headings in clockwise order starting at north.</summary>
+    public static readonly AgentAction[] MovementDirections =
+    [
+        AgentAction.North,
+        AgentAction.NorthNorthEast,
+        AgentAction.NorthEast,
+        AgentAction.EastNorthEast,
+        AgentAction.East,
+        AgentAction.EastSouthEast,
+        AgentAction.SouthEast,
+        AgentAction.SouthSouthEast,
+        AgentAction.South,
+        AgentAction.SouthSouthWest,
+        AgentAction.SouthWest,
+        AgentAction.WestSouthWest,
+        AgentAction.West,
+        AgentAction.WestNorthWest,
+        AgentAction.NorthWest,
+        AgentAction.NorthNorthWest
+    ];
+
+    /// <summary>Maps an action to a unit step vector (zero for <see cref="AgentAction.Stay"/>).</summary>
     /// <param name="action">The action to convert.</param>
-    /// <returns>A unit step vector in world coordinates.</returns>
-    public static Vec2 ToStep(this AgentAction action) => action switch
+    /// <returns>A normalized step direction in world coordinates.</returns>
+    public static Vec2 ToStep(this AgentAction action)
     {
-        AgentAction.North => new(0, -1),
-        AgentAction.NorthEast => new(1, -1),
-        AgentAction.East => new(1, 0),
-        AgentAction.SouthEast => new(1, 1),
-        AgentAction.South => new(0, 1),
-        AgentAction.SouthWest => new(-1, 1),
-        AgentAction.West => new(-1, 0),
-        AgentAction.NorthWest => new(-1, -1),
-        _ => Vec2.Zero
-    };
+        for (int i = 0; i < MovementDirections.Length; i++)
+        {
+            if (MovementDirections[i] == action)
+                return DirectionUnit(i);
+        }
+
+        return action == AgentAction.Stay ? Vec2.Zero : Vec2.Zero;
+    }
+
+    /// <summary>Picks the nearest compass heading for a displacement vector.</summary>
+    /// <param name="delta">Desired movement direction.</param>
+    /// <returns>The closest <see cref="AgentAction"/> heading, or stay when near zero.</returns>
+    public static AgentAction NearestTo(Vec2 delta)
+    {
+        if (delta.Length < 1e-6)
+            return AgentAction.Stay;
+
+        var angle = Math.Atan2(delta.X, -delta.Y);
+        if (angle < 0)
+            angle += Math.Tau;
+
+        var index = ((int)Math.Round(angle / (Math.PI / 8)) % 16 + 16) % 16;
+        return MovementDirections[index];
+    }
+
+    private static Vec2 DirectionUnit(int index)
+    {
+        var angle = index * (Math.PI / 8);
+        return new Vec2(Math.Sin(angle), -Math.Cos(angle));
+    }
 }

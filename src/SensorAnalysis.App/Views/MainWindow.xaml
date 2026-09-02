@@ -32,6 +32,9 @@
         <Separator/>
         <MenuItem Header="Run _Experiment…" Command="{Binding RunExperimentCommand}"/>
       </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="_Centered" IsCheckable="True" IsChecked="{Binding ViewCentered}"/>
+      </MenuItem>
     </Menu>
 
     <StatusBar DockPanel.Dock="Bottom">
@@ -52,6 +55,10 @@
         <Button Content="Step" Command="{Binding StepCommand}" Width="50"/>
         <Button Content="Run" Command="{Binding RunCommand}" Width="50"/>
         <Button Content="Stop" Command="{Binding StopCommand}" Width="50"/>
+        <Separator/>
+        <CheckBox Content="Centered" IsChecked="{Binding ViewCentered}"
+                  VerticalAlignment="Center" Margin="4,0"
+                  ToolTip="When on, keep the world centered; when off, drag to pan and follow selection"/>
         <Separator/>
         <TextBlock Text="Delay ms:" VerticalAlignment="Center" Margin="4,0"/>
         <TextBox Text="{Binding TickDelayMs, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
@@ -85,6 +92,7 @@
           <controls:WorldCanvas x:Name="WorldView"
                                 World="{Binding World}"
                                 Zoom="{Binding Zoom, Mode=TwoWay}"
+                                ViewCentered="{Binding ViewCentered, Mode=TwoWay}"
                                 SelectedObject="{Binding SelectedObject, Mode=TwoWay}"
                                 SelectedTile="{Binding SelectedTile, Mode=TwoWay}"/>
         </Border>

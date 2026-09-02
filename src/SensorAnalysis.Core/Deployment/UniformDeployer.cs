@@ -4,7 +4,7 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Core.Deployment;
 
 /// <summary>Options for <see cref="UniformDeployer"/>.</summary>
-public sealed class UniformDeployOptions
+public sealed class UniformDeployOptions : DeployerOptionsBase
 {
     /// <summary>How many objects to place.</summary>
     [DeployerParam("Count")]
@@ -42,7 +42,7 @@ public sealed class UniformDeployer : IDeployer
     public void Attach(SimWorld world, object options, DeployContext context)
     {
         var o = (UniformDeployOptions)options;
-        DeployableSpawner.SpawnUniform(world, context, o.Count, o.TypeName, "obj");
+        DeployableSpawner.SpawnUniform(world, context, o.Count, o.TypeName, "obj", o.MinDistance);
         _dormant = true;
     }
 

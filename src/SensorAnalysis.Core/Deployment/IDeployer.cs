@@ -12,6 +12,12 @@ namespace SensorAnalysis.Core.Deployment;
 /// </summary>
 public interface IDeployer
 {
+    /// <summary>
+    /// Maximum placement retries per object when <c>MinDistance</c> is set on deployer options.
+    /// After this many failed attempts, any candidate position is accepted.
+    /// </summary>
+    static int MaxPlacementRetries { get; } = 10;
+
     /// <summary>Unique name for UI/CLI selection.</summary>
     string Name { get; }
 

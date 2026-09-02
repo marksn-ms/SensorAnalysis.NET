@@ -5,7 +5,7 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Agents.Deployers;
 
 /// <summary>Options for <see cref="GaussianDeployer"/>.</summary>
-public sealed class GaussianDeployOptions
+public sealed class GaussianDeployOptions : DeployerOptionsBase
 {
     /// <summary>How many objects to place.</summary>
     [DeployerParam("Count")]
@@ -48,7 +48,7 @@ public sealed class GaussianDeployer : IDeployer
     {
         var o = (GaussianDeployOptions)options;
         DeployableSpawner.SpawnGaussian(
-            world, context, o.Count, o.TypeName, o.DeploySigma, "obj");
+            world, context, o.Count, o.TypeName, o.DeploySigma, "obj", o.MinDistance);
         _dormant = true;
     }
 

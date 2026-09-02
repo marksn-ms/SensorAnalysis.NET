@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SensorAnalysis.Space.App/SensorAnalysis.Space.App.csproj" />
+    <Project Path="src/SensorAnalysis.Space.Core/SensorAnalysis.Space.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SensorAnalysis.Space.Core.Tests/SensorAnalysis.Space.Core.Tests.csproj" />
+  </Folder>
+</Solution>

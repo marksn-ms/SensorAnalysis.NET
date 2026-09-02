@@ -10,7 +10,8 @@ namespace SensorAnalysis.App.Controls;
 
 /// <summary>
 /// Renders the simulation world: tiles, agents, incidents, messages.
-/// Supports pan (middle/right drag) and zoom (wheel).
+/// Supports pan (drag when not centered) and zoom (wheel).
+/// When <see cref="ViewCentered"/> is true, the view tracks the world center or selection.
 /// Agent/incident colors and shapes come from <see cref="EntityVisualCatalog"/>.
 /// Left-click selects an entity or a tile.
 /// </summary>
@@ -19,22 +20,29 @@ public class WorldCanvas : FrameworkElement
     /// <summary>Identifies the <see cref="World"/> dependency property.</summary>
     public static readonly DependencyProperty WorldProperty =
         DependencyProperty.Register(nameof(World), typeof(SimWorld), typeof(WorldCanvas),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnViewFocusInputChanged));
 
     /// <summary>Identifies the <see cref="Zoom"/> dependency property.</summary>
     public static readonly DependencyProperty ZoomProperty =
         DependencyProperty.Register(nameof(Zoom), typeof(double), typeof(WorldCanvas),
-            new FrameworkPropertyMetadata(1.0, FrameworkPropertyMetadataOptions.AffectsRender | FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+            new FrameworkPropertyMetadata(1.0, FrameworkPropertyMetadataOptions.AffectsRender | FrameworkPropertyMetadataOptions.BindsTwoWayByDefault, OnViewFocusInputChanged));
 
     /// <summary>Identifies the <see cref="SelectedObject"/> dependency property.</summary>
     public static readonly DependencyProperty SelectedObjectProperty =
         DependencyProperty.Register(nameof(SelectedObject), typeof(WorldObject), typeof(WorldCanvas),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender, OnViewFocusInputChanged));
 
     /// <summary>Identifies the <see cref="SelectedTile"/> dependency property.</summary>
     public static readonly DependencyProperty SelectedTileProperty =
         DependencyProperty.Register(nameof(SelectedTile), typeof(Tile), typeof(WorldCanvas),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender, OnViewFocusInputChanged));
+
+    /// <summary>Identifies the <see cref="ViewCentered"/> dependency property.</summary>
+    public static readonly DependencyProperty ViewCenteredProperty =
+        DependencyProperty.Register(nameof(ViewCentered), typeof(bool), typeof(WorldCanvas),
+            new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault, OnViewFocusInputChanged));
+
+    private const double DragThresholdPx = 3;
 
     /// <summary>Simulation world to render, or <c>null</c> when none is loaded.</summary>
     public SimWorld? World
@@ -65,6 +73,16 @@ public class WorldCanvas : FrameworkElement
     }
 
     /// <summary>
+    /// When true (default), the view auto-centers on the world or current selection.
+    /// When false, left-drag pans manually; a selected entity stays centered while moving.
+    /// </summary>
+    public bool ViewCentered
+    {
+        get => (bool)GetValue(ViewCenteredProperty);
+        set => SetValue(ViewCenteredProperty, value);
+    }
+
+    /// <summary>
     /// Visual style catalog used for agent/incident markers.
     /// Defaults to <see cref="EntityVisualCatalog.Default"/>.
     /// </summary>
@@ -73,6 +91,7 @@ public class WorldCanvas : FrameworkElement
     private Point _panOffset;
     private Point? _dragStart;
     private Point _panAtDragStart;
+    private bool _didDrag;
 
     private static readonly Pen TilePen = new(new SolidColorBrush(Color.FromRgb(60, 60, 60)), 1);
     private static readonly Brush MessageBrush = new SolidColorBrush(Color.FromRgb(180, 255, 120));
@@ -97,14 +116,18 @@ public class WorldCanvas : FrameworkElement
     {
         Focusable = true;
         ClipToBounds = true;
+        SizeChanged += (_, _) => UpdateViewFocus();
     }
+
+    private static void OnViewFocusInputChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
+        ((WorldCanvas)d).UpdateViewFocus();
 
     /// <inheritdoc />
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         var factor = e.Delta > 0 ? 1.1 : 1 / 1.1;
         Zoom = Math.Clamp(Zoom * factor, 0.1, 8.0);
-        InvalidateVisual();
+        UpdateViewFocus();
         e.Handled = true;
     }
 
@@ -112,30 +135,24 @@ public class WorldCanvas : FrameworkElement
     protected override void OnMouseDown(MouseButtonEventArgs e)
     {
         Focus();
-        if (e.ChangedButton is MouseButton.Middle or MouseButton.Right)
+        if (ViewCentered)
         {
-            _dragStart = e.GetPosition(this);
-            _panAtDragStart = _panOffset;
-            CaptureMouse();
-            e.Handled = true;
+            if (e.ChangedButton == MouseButton.Left && World is not null)
+            {
+                _didDrag = false;
+                _dragStart = e.GetPosition(this);
+                CaptureMouse();
+                e.Handled = true;
+            }
             return;
         }
 
-        if (e.ChangedButton == MouseButton.Left && World is not null)
+        if (e.ChangedButton is MouseButton.Left or MouseButton.Middle or MouseButton.Right)
         {
-            var worldPt = ScreenToWorld(e.GetPosition(this));
-            var hit = HitTest(worldPt);
-            if (hit is null)
-            {
-                SelectedObject = null;
-                SelectedTile = World.TileAt(worldPt);
-            }
-            else
-            {
-                SelectedTile = null;
-                SelectedObject = hit;
-            }
-            InvalidateVisual();
+            _didDrag = false;
+            _dragStart = e.GetPosition(this);
+            _panAtDragStart = _panOffset;
+            CaptureMouse();
             e.Handled = true;
         }
     }
@@ -143,9 +160,15 @@ public class WorldCanvas : FrameworkElement
     /// <inheritdoc />
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (_dragStart is { } start && IsMouseCaptured)
+        if (_dragStart is not { } start || !IsMouseCaptured)
+            return;
+
+        var now = e.GetPosition(this);
+        if ((now - start).Length > DragThresholdPx)
+            _didDrag = true;
+
+        if (!ViewCentered)
         {
-            var now = e.GetPosition(this);
             _panOffset = new Point(
                 _panAtDragStart.X + (now.X - start.X),
                 _panAtDragStart.Y + (now.Y - start.Y));
@@ -156,9 +179,37 @@ public class WorldCanvas : FrameworkElement
     /// <inheritdoc />
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
-        if (IsMouseCaptured)
-            ReleaseMouseCapture();
+        if (!IsMouseCaptured)
+            return;
+
+        if (e.ChangedButton == MouseButton.Left && World is not null && !_didDrag)
+            ApplySelectionAt(e.GetPosition(this));
+
+        ReleaseMouseCapture();
         _dragStart = null;
+        _didDrag = false;
+        e.Handled = true;
+    }
+
+    private void ApplySelectionAt(Point screenPt)
+    {
+        if (World is null) return;
+
+        var worldPt = ScreenToWorld(screenPt);
+        var hit = HitTest(worldPt);
+        if (hit is null)
+        {
+            SelectedObject = null;
+            SelectedTile = World.TileAt(worldPt);
+        }
+        else
+        {
+            SelectedTile = null;
+            SelectedObject = hit;
+        }
+
+        UpdateViewFocus();
+        InvalidateVisual();
     }
 
     /// <inheritdoc />
@@ -320,6 +371,45 @@ public class WorldCanvas : FrameworkElement
         return null;
     }
 
-    /// <summary>Call after each simulation tick to redraw.</summary>
-    public void Refresh() => InvalidateVisual();
+    /// <summary>Call after each simulation tick to redraw and follow the current focus.</summary>
+    public void Refresh()
+    {
+        UpdateViewFocus();
+        InvalidateVisual();
+    }
+
+    /// <summary>Re-centers the view when auto-center or follow-selection rules apply.</summary>
+    public void UpdateViewFocus()
+    {
+        if (GetFocusWorldPoint() is not { } focus)
+            return;
+
+        CenterOn(focus);
+    }
+
+    private Vec2? GetFocusWorldPoint()
+    {
+        if (SelectedObject is WorldObject obj)
+            return obj.Position;
+
+        if (SelectedTile is Tile tile)
+            return tile.Center;
+
+        if (ViewCentered && World is not null)
+            return new Vec2(World.WorldWidthPx / 2.0, World.WorldHeightPx / 2.0);
+
+        return null;
+    }
+
+    private void CenterOn(Vec2 worldPoint)
+    {
+        if (ActualWidth <= 0 || ActualHeight <= 0)
+            return;
+
+        var cx = ActualWidth / 2.0;
+        var cy = ActualHeight / 2.0;
+        _panOffset = new Point(
+            cx - worldPoint.X * Zoom,
+            cy - worldPoint.Y * Zoom);
+    }
 }

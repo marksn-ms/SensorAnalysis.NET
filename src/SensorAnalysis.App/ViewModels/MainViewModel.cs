@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -40,14 +41,19 @@ public partial class MainViewModel : ObservableObject
     private readonly ConnectivityWatcher _connectivityWatcher = new(sampleEveryTicks: 1);
     private readonly IncidentClearanceWatcher _clearanceWatcher = new(sampleEveryTicks: 1);
     private readonly TrustTelemetryWatcher _trustTelWatcher = new(sampleEveryTicks: 5);
+    private readonly CrowdIntrusionWatcher _crowdIntrusionWatcher = new(sampleEveryTicks: 5);
+    private readonly ProgressStallWatcher _progressStallWatcher = new(sampleEveryTicks: 5);
+    private readonly LloydOccupancyWatcher _lloydOccupancyWatcher = new(sampleEveryTicks: 5);
+    private readonly PheromoneFieldWatcher _pheromoneFieldWatcher = new(sampleEveryTicks: 5);
+    private readonly BoidsPeelWatcher _boidsPeelWatcher = new(sampleEveryTicks: 5);
     private readonly CanvasVideoRecorder _videoRecorder = new();
     private RadioTrafficLog? _boundRadio;
 
     private WorldOptions _lastWorldOptions = new()
     {
         Title = "New World",
-        TileCount = new GridSize(12, 12),
-        TileSizePx = new GridSize(40, 40)
+        TileCount = new GridSize(10, 10),
+        TileSizePx = new GridSize(100, 100)
     };
     private int _lastSeed = 42;
 
@@ -76,23 +82,31 @@ public partial class MainViewModel : ObservableObject
         DeployableTypeNames = new ObservableCollection<string>(
             _deployables.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
         DeployerNames = new ObservableCollection<string>(
-            _deployerFactories
-                .Select(kv => (Key: kv.Key, Name: kv.Value().Name))
-                .Where(x => string.Equals(x.Key, x.Name, StringComparison.OrdinalIgnoreCase))
-                .Select(x => x.Name)
-                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+            new[] { "Random", "Uniform", "Gaussian", "Periodic", "PlaceNear" }
+                .Where(n => _deployerFactories.ContainsKey(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase));
 
         _runner.AddWatcher(_coverageWatcher);
         _runner.AddWatcher(_connectivityWatcher);
         _runner.AddWatcher(_clearanceWatcher);
         _runner.AddWatcher(_trustTelWatcher);
+        _runner.AddWatcher(_crowdIntrusionWatcher);
+        _runner.AddWatcher(_progressStallWatcher);
+        _runner.AddWatcher(_lloydOccupancyWatcher);
+        _runner.AddWatcher(_pheromoneFieldWatcher);
+        _runner.AddWatcher(_boidsPeelWatcher);
         _runner.TickCompleted += OnTickCompleted;
 
         RebuildMetricCatalog();
         SeedDefaultMetrics();
-        DraftDeployerName = "Gaussian";
+        DraftDeployerName = "Random";
+
+        if (AppSettingsStore.TryLoad(out var settings))
+            ApplyAppSettings(settings);
+        else
+            ApplyDefaultAppSettings();
+
         RebuildDraftFields();
-        SeedDefaultDirectives();
 
         _runTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _runTimer.Tick += (_, _) => AdvanceOneTick();
@@ -101,10 +115,26 @@ public partial class MainViewModel : ObservableObject
         _startup = GuiStartupOptions.Parse(Environment.GetCommandLineArgs().Skip(1).ToArray());
     }
 
+    /// <summary>Persists world options and the directive log to local app settings.</summary>
+    public void SaveAppSettings()
+    {
+        AppSettingsStore.Save(new AppSettingsDocument
+        {
+            World = WorldSettings.From(_lastWorldOptions, _lastSeed),
+            Directives = Directives.Select(d => new DirectiveSettings
+            {
+                AtTick = d.AtTick,
+                DeployerName = d.DeployerName,
+                Parameters = new Dictionary<string, object?>(d.Parameters, StringComparer.Ordinal)
+            }).ToList()
+        });
+    }
+
     [ObservableProperty] private SimWorld? _world;
     [ObservableProperty] private WorldObject? _selectedObject;
     [ObservableProperty] private Tile? _selectedTile;
     [ObservableProperty] private double _zoom = 1.0;
+    [ObservableProperty] private bool _viewCentered = true;
     [ObservableProperty] private string _statusText = "Ready";
     [ObservableProperty] private string _tickText = "Tick 0";
     [ObservableProperty] private string _selectionSummary = "Nothing selected";
@@ -159,6 +189,8 @@ public partial class MainViewModel : ObservableObject
             RefreshSelectionSummary();
         else if (SelectedTile is null)
             SelectionSummary = "Nothing selected";
+
+        Canvas?.UpdateViewFocus();
     }
 
     partial void OnSelectedTileChanged(Tile? value)
@@ -167,7 +199,11 @@ public partial class MainViewModel : ObservableObject
             RefreshSelectionSummary();
         else if (SelectedObject is null)
             SelectionSummary = "Nothing selected";
+
+        Canvas?.UpdateViewFocus();
     }
+
+    partial void OnViewCenteredChanged(bool value) => Canvas?.UpdateViewFocus();
 
     /// <summary>Create a new simulation world using the last-used options and seed.</summary>
     [RelayCommand]
@@ -193,6 +229,7 @@ public partial class MainViewModel : ObservableObject
         _lastWorldOptions = dlgVm.ToWorldOptions();
         _lastSeed = dlgVm.Seed;
         ResetWorld(_lastWorldOptions, _lastSeed);
+        SaveAppSettings();
         StatusText = $"World created ({_lastWorldOptions.TileCount.Width}×{_lastWorldOptions.TileCount.Height}, seed {_lastSeed}).";
     }
 
@@ -263,9 +300,12 @@ public partial class MainViewModel : ObservableObject
             Parameters = parameters
         };
         Directives.Add(d);
+        TrackDirective(d);
+        RefreshDirectiveSummary(d);
         SelectedDirective = d;
         DraftValidationMessage = "";
         StatusText = $"Added: {d.Summary}";
+        SaveAppSettings();
     }
 
     private bool CanAddDirective() =>
@@ -285,8 +325,10 @@ public partial class MainViewModel : ObservableObject
     private void RemoveDirective()
     {
         if (SelectedDirective is null) return;
+        UntrackDirective(SelectedDirective);
         Directives.Remove(SelectedDirective);
         SelectedDirective = null;
+        SaveAppSettings();
     }
 
     /// <summary>
@@ -640,17 +682,21 @@ public partial class MainViewModel : ObservableObject
         Directives.Clear();
         foreach (var d in recipe.Directives)
         {
-            Directives.Add(new EnvironmentDirective
+            var directive = new EnvironmentDirective
             {
                 AtTick = d.AtTick,
                 DeployerName = d.Deployer,
                 Salt = d.Salt,
                 Parameters = new Dictionary<string, object?>(d.Parameters, StringComparer.Ordinal)
-            });
+            };
+            Directives.Add(directive);
+            TrackDirective(directive);
+            RefreshDirectiveSummary(directive);
         }
 
         SelectedDirective = Directives.FirstOrDefault();
         ResetWorld(_lastWorldOptions, _lastSeed);
+        SaveAppSettings();
         StatusText = $"Loaded recipe: {path} ({Directives.Count} directive(s)). Edit with the form or Step/Run.";
     }
 
@@ -699,11 +745,21 @@ public partial class MainViewModel : ObservableObject
         var connectivity = new ConnectivityWatcher(1);
         var clearance = new IncidentClearanceWatcher(1);
         var trustTel = new TrustTelemetryWatcher(5);
+        var crowdIntrusion = new CrowdIntrusionWatcher(5);
+        var progressStall = new ProgressStallWatcher(5);
+        var lloydOccupancy = new LloydOccupancyWatcher(5);
+        var pheromoneField = new PheromoneFieldWatcher(5);
+        var boidsPeel = new BoidsPeelWatcher(5);
         var runner = new Core.World.SimulationRunner();
         runner.AddWatcher(coverage);
         runner.AddWatcher(connectivity);
         runner.AddWatcher(clearance);
         runner.AddWatcher(trustTel);
+        runner.AddWatcher(crowdIntrusion);
+        runner.AddWatcher(progressStall);
+        runner.AddWatcher(lloydOccupancy);
+        runner.AddWatcher(pheromoneField);
+        runner.AddWatcher(boidsPeel);
 
         var steps = Directives.Select(ToDeployStep).ToList();
         var manifest = runner.RunExperiment(new Core.World.ExperimentRequest
@@ -720,7 +776,7 @@ public partial class MainViewModel : ObservableObject
 
         var dir = Path.Combine(Environment.CurrentDirectory, "experiments",
             $"{manifest.ExperimentName}-{DateTime.Now:yyyyMMdd-HHmmss}");
-        ExperimentExporter.Export(dir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel });
+        ExperimentExporter.Export(dir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel, crowdIntrusion, progressStall, lloydOccupancy, pheromoneField, boidsPeel });
         StatusText = $"Experiment exported to {dir}";
         MessageBox.Show($"Exported to:\n{dir}", "Done");
     }
@@ -1277,28 +1333,103 @@ public partial class MainViewModel : ObservableObject
 
     private void SeedDefaultDirectives()
     {
-        Directives.Add(new EnvironmentDirective
-        {
-            AtTick = 0,
-            DeployerName = "Gaussian",
-            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["Count"] = 10,
-                ["TypeName"] = "OrbitingCoop",
-                ["SensorRange"] = 80.0
-            }
-        });
-        Directives.Add(new EnvironmentDirective
-        {
-            AtTick = 0,
-            DeployerName = "Periodic",
-            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["PeriodTicks"] = 25,
-                ["Count"] = 1,
-                ["TypeName"] = "Incident"
-            }
-        });
+        Directives.Add(CreateDefaultAgentDirective());
+        Directives.Add(CreateDefaultIncidentDirective());
         SelectedDirective = Directives[0];
+    }
+
+    private static EnvironmentDirective CreateDefaultAgentDirective() => new()
+    {
+        AtTick = 0,
+        DeployerName = "Random",
+        Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Count"] = 10,
+            ["TypeName"] = "OrbitingCoop",
+            ["SensorRange"] = 100.0,
+            ["MinDistance"] = 100.0
+        }
+    };
+
+    private static EnvironmentDirective CreateDefaultIncidentDirective() => new()
+    {
+        AtTick = 0,
+        DeployerName = "Random",
+        Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Count"] = 10,
+            ["TypeName"] = "Incident",
+            ["MinDistance"] = 100.0
+        }
+    };
+
+    private void ApplyDefaultAppSettings()
+    {
+        _lastWorldOptions = WorldSettings.CreateDefault().ToWorldOptions();
+        _lastSeed = WorldSettings.CreateDefault().Seed;
+        Directives.Clear();
+        SeedDefaultDirectives();
+        foreach (var d in Directives)
+        {
+            TrackDirective(d);
+            RefreshDirectiveSummary(d);
+        }
+    }
+
+    private void ApplyAppSettings(AppSettingsDocument settings)
+    {
+        _lastWorldOptions = settings.World.ToWorldOptions();
+        _lastSeed = settings.World.Seed;
+
+        Directives.Clear();
+        foreach (var d in settings.Directives)
+        {
+            var directive = new EnvironmentDirective
+            {
+                AtTick = d.AtTick,
+                DeployerName = d.DeployerName,
+                Parameters = new Dictionary<string, object?>(d.Parameters, StringComparer.Ordinal)
+            };
+            Directives.Add(directive);
+            TrackDirective(directive);
+            RefreshDirectiveSummary(directive);
+        }
+
+        if (Directives.Count == 0)
+        {
+            SeedDefaultDirectives();
+            foreach (var d in Directives)
+            {
+                TrackDirective(d);
+                RefreshDirectiveSummary(d);
+            }
+        }
+
+        SelectedDirective = Directives.FirstOrDefault();
+    }
+
+    private void TrackDirective(EnvironmentDirective directive) =>
+        directive.PropertyChanged += OnDirectivePropertyChanged;
+
+    private void UntrackDirective(EnvironmentDirective directive) =>
+        directive.PropertyChanged -= OnDirectivePropertyChanged;
+
+    private void OnDirectivePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not EnvironmentDirective directive)
+            return;
+
+        if (e.PropertyName is nameof(EnvironmentDirective.AtTick) or nameof(EnvironmentDirective.DeployerName))
+            RefreshDirectiveSummary(directive);
+    }
+
+    private void RefreshDirectiveSummary(EnvironmentDirective directive)
+    {
+        directive.Summary = DirectiveSummaryFormatter.Format(
+            directive.AtTick,
+            directive.DeployerName,
+            directive.Parameters,
+            _deployerFactories,
+            _deployables);
     }
 }

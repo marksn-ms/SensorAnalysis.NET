@@ -169,15 +169,8 @@ public partial class EnvironmentDirective : ObservableObject
     [ObservableProperty] private string _status = "";
 
     /// <summary>One-line summary for the directive list.</summary>
-    public string Summary
-    {
-        get
-        {
-            var bits = Parameters.Select(kv => $"{kv.Key}={kv.Value}");
-            return $"t={AtTick}: {DeployerName} ({string.Join(", ", bits)})";
-        }
-    }
+    [ObservableProperty] private string _summary = "";
 
-    partial void OnAtTickChanged(long value) => OnPropertyChanged(nameof(Summary));
-    partial void OnDeployerNameChanged(string value) => OnPropertyChanged(nameof(Summary));
+    /// <inheritdoc />
+    public override string ToString() => Summary;
 }

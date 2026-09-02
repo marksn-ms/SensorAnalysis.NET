@@ -17,5 +17,10 @@ public partial class MainWindow : Window
             vm.Canvas = WorldView;
             vm.TryLoadStartupRecipe();
         };
+        Closing += (_, _) =>
+        {
+            if (DataContext is MainViewModel viewModel)
+                viewModel.SaveAppSettings();
+        };
     }
 }

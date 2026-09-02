@@ -11,16 +11,16 @@ public partial class WorldOptionsDialogViewModel : ObservableObject
     [ObservableProperty] private string _title = "New World";
 
     /// <summary>Number of tile columns.</summary>
-    [ObservableProperty] private int _tileColumns = 12;
+    [ObservableProperty] private int _tileColumns = 10;
 
     /// <summary>Number of tile rows.</summary>
-    [ObservableProperty] private int _tileRows = 12;
+    [ObservableProperty] private int _tileRows = 10;
 
     /// <summary>Tile width in pixels.</summary>
-    [ObservableProperty] private int _tileWidthPx = 40;
+    [ObservableProperty] private int _tileWidthPx = 100;
 
     /// <summary>Tile height in pixels.</summary>
-    [ObservableProperty] private int _tileHeightPx = 40;
+    [ObservableProperty] private int _tileHeightPx = 100;
 
     /// <summary>RNG seed for the new world.</summary>
     [ObservableProperty] private int _seed = 42;

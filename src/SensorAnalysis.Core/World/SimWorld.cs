@@ -34,6 +34,7 @@ public sealed class SimWorld
         _tiles = BuildTiles(options);
         Title = options.Title;
         RewardModel = rewardModel ?? new RewardModel();
+        Pheromones = new PheromoneField(WorldWidthPx, WorldHeightPx);
     }
 
     /// <summary>Configuration used to construct this world.</summary>
@@ -75,6 +76,11 @@ public sealed class SimWorld
     /// Global radio traffic log (narrated Transmit events). Cleared with entities on demand by the UI.
     /// </summary>
     public RadioTrafficLog Radio => _radio;
+
+    /// <summary>
+    /// Unsigned decaying digital-pheromone field (no speaker id). Fresh per <see cref="SimWorld"/> instance.
+    /// </summary>
+    public PheromoneField Pheromones { get; }
 
     /// <summary>Two-dimensional tile grid indexed by <c>[col, row]</c>.</summary>
     public Tile[,] Tiles => _tiles;
@@ -122,6 +128,7 @@ public sealed class SimWorld
         _agents.Clear();
         _incidents.Clear();
         _messages.Clear();
+        Pheromones.Clear();
     }
 
     /// <summary>
@@ -320,6 +327,10 @@ public sealed class SimWorld
             tile.LastCoveredTick = CurrentTick;
         }
 
+        // 5. Unsigned pheromone diffuses then evaporates once per tick (after deposits).
+        Pheromones.Diffuse();
+        Pheromones.Decay();
+
         CurrentTick++;
     }
 
@@ -398,7 +409,7 @@ public sealed class WorldOptions
 
     /// <summary>
     /// At most this many in-range agents may drain an incident per tick — the closest ones.
-    /// Aligns with honest squad <c>MaxOrbiters</c> (default 3). Extra agents in range do not accelerate clearance.
+    /// Aligns with honest squad <c>MaxShareEvent</c> (default 3). Extra agents in range do not accelerate clearance.
     /// </summary>
     public int MaxDrainingAgentsPerIncident { get; set; } = 3;
 }

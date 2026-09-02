@@ -29,9 +29,14 @@ public partial class MainWindow : Window
     private readonly WriteableBitmap _heatmap = new(HeatmapWidth, HeatmapHeight, 96, 96, PixelFormats.Bgra32, null);
     private GeometryModel3D? _surfaceModel;
 
-    private double _yaw = -38;
-    private double _pitch = -22;
+    private const double DefaultYaw = -38;
+    private const double DefaultPitch = -22;
+    private const double DragThresholdPx = 3;
+
+    private double _yaw = DefaultYaw;
+    private double _pitch = DefaultPitch;
     private double _distance = 4.1;
+    private bool _viewCentered = true;
     private Point? _dragStart;
     private double _dragYaw;
     private double _dragPitch;
@@ -69,6 +74,7 @@ public partial class MainWindow : Window
         UpdateAgentPositions();
         UpdateIncidentPositions();
         UpdateHeatmap();
+        UpdateViewFocus();
         UpdatePanels();
     }
 
@@ -99,8 +105,49 @@ public partial class MainWindow : Window
         WorldViewport.Children.Clear();
         WorldViewport.Children.Add(new ModelVisual3D { Content = _scene });
         UpdatePanels();
-        UpdateCamera();
+        UpdateViewFocus();
         StatusText.Text = $"{_worldTitle} · resolution n={_options.Resolution} · {_world.Mesh.Faces.Count:N0} faces";
+    }
+
+    private void ViewCentered_Changed(object sender, RoutedEventArgs e)
+    {
+        _viewCentered = sender switch
+        {
+            MenuItem => ViewCenteredMenuItem.IsChecked == true,
+            _ => ViewCenteredCheckBox.IsChecked == true
+        };
+        ViewCenteredMenuItem.IsChecked = _viewCentered;
+        ViewCenteredCheckBox.IsChecked = _viewCentered;
+        UpdateViewFocus();
+    }
+
+    private void UpdateViewFocus()
+    {
+        if (!_viewCentered && _selected is null)
+            return;
+
+        if (_selected is SphericalAgent agent)
+            SetCameraToward(new Vector3D(agent.Position.X, agent.Position.Y, agent.Position.Z));
+        else if (_selected is SphericalIncident incident)
+            SetCameraToward(new Vector3D(incident.Position.X, incident.Position.Y, incident.Position.Z));
+        else if (_viewCentered)
+        {
+            _yaw = DefaultYaw;
+            _pitch = DefaultPitch;
+            UpdateCamera();
+        }
+    }
+
+    private void SetCameraToward(Vector3D surfacePoint)
+    {
+        if (surfacePoint.LengthSquared < 1e-12)
+            return;
+
+        surfacePoint.Normalize();
+        var camY = -surfacePoint.Y;
+        _pitch = Math.Asin(Math.Clamp(camY, -1, 1)) * 180 / Math.PI;
+        _yaw = Math.Atan2(-surfacePoint.Z, -surfacePoint.X) * 180 / Math.PI;
+        UpdateCamera();
     }
 
     private static IReadOnlyList<SphericalDirective> CreateDefaultDirectives(SphericalWorld world) =>
@@ -582,25 +629,39 @@ public partial class MainWindow : Window
     {
         _didDrag = false;
         _dragStart = e.GetPosition(WorldViewport);
-        _dragYaw = _yaw;
-        _dragPitch = _pitch;
+        if (!_viewCentered)
+        {
+            _dragYaw = _yaw;
+            _dragPitch = _pitch;
+        }
+
         WorldViewport.CaptureMouse();
     }
 
     private void Viewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         var click = e.GetPosition(WorldViewport);
-        WorldViewport.ReleaseMouseCapture();
-        if (!_didDrag) TrySelectByHitTest(click);
+        if (WorldViewport.IsMouseCaptured)
+            WorldViewport.ReleaseMouseCapture();
+
+        if (!_didDrag)
+            TrySelectByHitTest(click);
+
         _dragStart = null;
+        _didDrag = false;
+        UpdateViewFocus();
         UpdatePanels();
     }
 
     private void Viewport_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_dragStart is not { } start || !WorldViewport.IsMouseCaptured) return;
+        if (_viewCentered || _dragStart is not { } start || !WorldViewport.IsMouseCaptured)
+            return;
+
         var now = e.GetPosition(WorldViewport);
-        if ((now - start).Length > 3) _didDrag = true;
+        if ((now - start).Length > DragThresholdPx)
+            _didDrag = true;
+
         _yaw = _dragYaw + (now.X - start.X) * 0.5;
         _pitch = Math.Clamp(_dragPitch + (now.Y - start.Y) * 0.5, -85, 85);
         UpdateCamera();
@@ -609,16 +670,21 @@ public partial class MainWindow : Window
     private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         _distance = Math.Clamp(_distance * (e.Delta > 0 ? 0.88 : 1.14), 2.1, 12);
-        UpdateCamera();
+        UpdateViewFocus();
     }
 
     private void TrySelectByHitTest(Point click)
     {
         var result = VisualTreeHelper.HitTest(WorldViewport, click);
-        if (result is not RayMeshGeometry3DHitTestResult meshHit) return;
-        if (meshHit.ModelHit is not GeometryModel3D model) return;
-        if (_modelEntities.TryGetValue(model, out var entity))
+        if (result is RayMeshGeometry3DHitTestResult meshHit
+            && meshHit.ModelHit is GeometryModel3D model
+            && _modelEntities.TryGetValue(model, out var entity))
+        {
             _selected = entity;
+            return;
+        }
+
+        _selected = null;
     }
 
     private void UpdateCamera()

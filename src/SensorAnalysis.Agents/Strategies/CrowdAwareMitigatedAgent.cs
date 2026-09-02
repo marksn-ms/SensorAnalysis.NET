@@ -8,12 +8,16 @@ namespace SensorAnalysis.Agents.Strategies;
 /// only yields personal space to trusted peers, and only lowers trust for herding
 /// intrusion (peer keeps closing inside personal space).
 /// </summary>
-public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
+public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent, ICrowdIntrusionTelemetry
 {
     private readonly Dictionary<int, BetaTrust> _trust = new();
     private readonly Dictionary<int, int> _offenseCount = new();
+    private readonly Dictionary<int, DisreputeBucket> _disreputeToward = new();
     private readonly Dictionary<int, double> _prevPeerDist = new();
     private readonly Dictionary<int, int> _intrusionTicks = new();
+    private readonly Dictionary<int, int> _lifetimeInside = new();
+    private readonly Dictionary<int, int> _lifetimeClosing = new();
+    private readonly Dictionary<int, int> _currentlyInside = new();
 
     /// <summary>Creates a crowd-aware mitigated agent.</summary>
     public CrowdAwareMitigatedAgent()
@@ -38,6 +42,25 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
 
     /// <summary>Mean trust toward a peer (prior if unknown).</summary>
     public double MeanTrustToward(int agentId) => MeanTrust(agentId);
+
+    /// <summary>Measurement-only: herding offense buckets (only channel this class uses).</summary>
+    public IReadOnlyDictionary<int, DisreputeBucket> DisreputeToward => _disreputeToward;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> CurrentIntrusionTicks => _intrusionTicks;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> LifetimeInsidePersonalSpaceTicks => _lifetimeInside;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> LifetimeClosingTicks => _lifetimeClosing;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> CurrentlyInsidePersonalSpace => _currentlyInside;
+
+    /// <inheritdoc />
+    public int HerdingOffenseCountToward(int targetId) =>
+        _disreputeToward.TryGetValue(targetId, out var b) ? b.Herding : 0;
 
     /// <summary>
     /// Tracks herding intrusions against peers, then delegates exploration to the personal-space base.
@@ -69,12 +92,19 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
             if (dist >= personal)
             {
                 _intrusionTicks[peer.Id] = 0;
+                _currentlyInside[peer.Id] = 0;
                 continue;
             }
 
+            _currentlyInside[peer.Id] = 1;
+            _lifetimeInside[peer.Id] = _lifetimeInside.GetValueOrDefault(peer.Id) + 1;
+
             var closing = dist + 1e-6 < prev;
             if (closing)
+            {
                 _intrusionTicks[peer.Id] = _intrusionTicks.GetValueOrDefault(peer.Id) + 1;
+                _lifetimeClosing[peer.Id] = _lifetimeClosing.GetValueOrDefault(peer.Id) + 1;
+            }
             else if (dist > prev + 0.5)
                 _intrusionTicks[peer.Id] = 0;
 
@@ -91,6 +121,7 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
             {
                 _prevPeerDist.Remove(id);
                 _intrusionTicks.Remove(id);
+                _currentlyInside.Remove(id);
             }
         }
     }
@@ -101,6 +132,8 @@ public sealed class CrowdAwareMitigatedAgent : PersonalSpaceCoopAgent
         _offenseCount[senderId] = n;
         var weight = FirstOffenseWeight * Math.Pow(2, n - 1);
         UpdateTrust(senderId, success: false, weight: weight);
+        _disreputeToward.TryGetValue(senderId, out var bucket);
+        _disreputeToward[senderId] = bucket.Add(ReputationOffenseKind.Herding, weight);
     }
 
     private double MeanTrust(int senderId)

@@ -15,26 +15,37 @@ public static class DeployableSpawner
     /// <param name="count">Number of objects to place.</param>
     /// <param name="typeName">Deployable registry key.</param>
     /// <param name="labelPrefix">Prefix for generated object labels.</param>
+    /// <param name="minDistance">Minimum spacing from existing and co-wave objects (0 = disabled).</param>
     public static void SpawnUniform(
         SimWorld world,
         DeployContext context,
         int count,
         string typeName,
-        string labelPrefix)
+        string labelPrefix,
+        double minDistance = 0)
     {
         var rng = world.Random;
         var n = Math.Max(0, count);
         var deployableParams = context.ParametersFor(typeName);
+        var avoid = IncidentPlacementHelper.CollectOccupiedPositions(world);
 
         for (int i = 0; i < n; i++)
         {
+            var position = IncidentPlacementHelper.PlaceWithMinSpacing(
+                world,
+                rng,
+                () => IncidentPlacementHelper.PlaceUniform(world, rng),
+                minDistance,
+                avoid);
+
             context.Deployables.Deploy(world, typeName, new DeployableSpawnRequest
             {
-                Position = IncidentPlacementHelper.PlaceUniform(world, rng),
+                Position = position,
                 Label = $"{labelPrefix}-{i}",
                 Parameters = deployableParams,
                 Rng = rng
             });
+            avoid.Add(position);
         }
     }
 
@@ -45,29 +56,40 @@ public static class DeployableSpawner
     /// <param name="typeName">Deployable registry key.</param>
     /// <param name="deploySigma">Gaussian σ in world units.</param>
     /// <param name="labelPrefix">Prefix for generated object labels.</param>
+    /// <param name="minDistance">Minimum spacing from existing and co-wave objects (0 = disabled).</param>
     public static void SpawnGaussian(
         SimWorld world,
         DeployContext context,
         int count,
         string typeName,
         double deploySigma,
-        string labelPrefix)
+        string labelPrefix,
+        double minDistance = 0)
     {
         var rng = world.Random;
         var drop = new Vec2(world.WorldWidthPx / 2.0, world.WorldHeightPx / 2.0);
         var sigma = Math.Max(1.0, deploySigma);
         var n = Math.Max(0, count);
         var deployableParams = context.ParametersFor(typeName);
+        var avoid = IncidentPlacementHelper.CollectOccupiedPositions(world);
 
         for (int i = 0; i < n; i++)
         {
+            var position = IncidentPlacementHelper.PlaceWithMinSpacing(
+                world,
+                rng,
+                () => SampleGaussian(rng, drop, sigma, world),
+                minDistance,
+                avoid);
+
             context.Deployables.Deploy(world, typeName, new DeployableSpawnRequest
             {
-                Position = SampleGaussian(rng, drop, sigma, world),
+                Position = position,
                 Label = $"{labelPrefix}-{i}",
                 Parameters = deployableParams,
                 Rng = rng
             });
+            avoid.Add(position);
         }
     }
 

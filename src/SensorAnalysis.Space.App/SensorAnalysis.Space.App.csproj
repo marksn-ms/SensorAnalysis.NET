@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>SensorAnalysis.Space.App</AssemblyName>
+    <RootNamespace>SensorAnalysis.Space.App</RootNamespace>
+    <Description>WPF Viewport3D client for the SensorAnalysis.Space volumetric platform.</Description>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Space.Core\SensorAnalysis.Space.Core.csproj" />
+  </ItemGroup>
+</Project>

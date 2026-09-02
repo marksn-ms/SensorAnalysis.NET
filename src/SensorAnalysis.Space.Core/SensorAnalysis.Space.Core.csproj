@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SensorAnalysis.Space.Core</AssemblyName>
+    <RootNamespace>SensorAnalysis.Space.Core</RootNamespace>
+    <Description>Volumetric toroidal space simulation primitives for SensorAnalysis.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SensorAnalysis.Space.Core.Tests" />
+  </ItemGroup>
+</Project>

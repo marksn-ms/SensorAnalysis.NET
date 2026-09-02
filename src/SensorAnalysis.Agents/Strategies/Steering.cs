@@ -2,29 +2,16 @@ using SensorAnalysis.Core.Domain;
 
 namespace SensorAnalysis.Agents.Strategies;
 
-/// <summary>Shared 8-connected steering helpers for search agents.</summary>
+/// <summary>Shared 16-point compass steering helpers for search agents.</summary>
 internal static class Steering
 {
-    public static AgentAction DirectionToward(Vec2 delta)
-    {
-        var ax = Math.Abs(delta.X);
-        var ay = Math.Abs(delta.Y);
-        if (ax < 1e-6 && ay < 1e-6) return AgentAction.Stay;
+    public static AgentAction DirectionToward(Vec2 delta) => AgentActionExtensions.NearestTo(delta);
 
-        var sx = Math.Sign(delta.X);
-        var sy = Math.Sign(delta.Y);
+    public static AgentAction RandomAction(Random rng) =>
+        AgentActionExtensions.MovementDirections[rng.Next(AgentActionExtensions.MovementDirections.Length)];
 
-        if (ax > ay * 2) return sx > 0 ? AgentAction.East : AgentAction.West;
-        if (ay > ax * 2) return sy > 0 ? AgentAction.South : AgentAction.North;
-
-        if (sx > 0 && sy > 0) return AgentAction.SouthEast;
-        if (sx > 0 && sy < 0) return AgentAction.NorthEast;
-        if (sx < 0 && sy > 0) return AgentAction.SouthWest;
-        if (sx < 0 && sy < 0) return AgentAction.NorthWest;
-        return AgentAction.Stay;
-    }
-
-    public static AgentAction RandomAction(Random rng)
+    /// <summary>Random heading including <see cref="AgentAction.Stay"/>.</summary>
+    public static AgentAction RandomActionIncludingStay(Random rng)
     {
         var values = Enum.GetValues<AgentAction>();
         return values[rng.Next(values.Length)];
@@ -42,6 +29,37 @@ internal static class Steering
         var tangent = new Vec2(radial.Y, -radial.X);
         var desired = centerRelative + radial * radius + tangent * Math.Max(radius * 0.35, 4);
         return DirectionToward(observation.DisplacementTo(desired));
+    }
+
+    /// <summary>
+    /// Keeps a task-preferred heading unless the agent must yield personal space to a peer.
+    /// Yields with <see cref="AgentAction.Stay"/> when <paramref name="shouldYieldTo"/> says so
+    /// and the peer is inside <paramref name="personalSpace"/> or the step would enter it.
+    /// </summary>
+    public static AgentAction RespectPersonalSpace(
+        AgentAction preferred,
+        IReadOnlyList<AgentInfo> neighbors,
+        double personalSpace,
+        double moveSpeed,
+        AgentObservation observation,
+        Func<AgentInfo, bool> shouldYieldTo)
+    {
+        if (neighbors.Count == 0 || personalSpace <= 0)
+            return preferred;
+
+        var step = preferred.ToStep() * moveSpeed;
+        foreach (var peer in neighbors)
+        {
+            if (!shouldYieldTo(peer))
+                continue;
+
+            var distNow = observation.DistanceTo(peer.Position);
+            var distAfter = observation.DistanceBetween(step, peer.Position);
+            if (distNow < personalSpace || distAfter < personalSpace)
+                return AgentAction.Stay;
+        }
+
+        return preferred;
     }
 
     /// <summary>

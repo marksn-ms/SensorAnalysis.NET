@@ -29,6 +29,16 @@ public static class BuiltinCatalog
         registry.Register(new PersonalSpaceCoopAgentFactory());
         registry.Register(new CrowdOnlyDeceptiveAgentFactory());
         registry.Register(new CrowdAwareMitigatedAgentFactory());
+        registry.Register(new ProgressCoopAgentFactory());
+        registry.Register(new ProgressLoiterDeceptiveAgentFactory());
+        registry.Register(new ProgressAwareMitigatedAgentFactory());
+        registry.Register(new LloydCoopAgentFactory());
+        registry.Register(new LloydParkDeceptiveAgentFactory());
+        registry.Register(new PheromoneCoopAgentFactory());
+        registry.Register(new PheromoneFakeDeceptiveAgentFactory());
+        registry.Register(new BoidsCoopAgentFactory());
+        registry.Register(new BoidsPeelDeceptiveAgentFactory());
+        registry.Register(new BoidsAwareMitigatedAgentFactory());
         return registry;
     }
 

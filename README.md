@@ -34,6 +34,7 @@ Used by the sibling **Trust** paper repo (`../Trust`) for cooperative search, de
 | `SensorAnalysis.Cli` | Headless batch runner |
 | `SensorAnalysis.Viewport3DPrototype` | Isolated WPF `Viewport3D` experiment for closed 3D tile worlds |
 | `SensorAnalysis.Core.Tests` | Unit tests |
+| `SensorAnalysis.Space.*` | Separate volumetric 3-torus platform (`SensorAnalysis.Space.slnx`) |
 
 ## Quick start
 
@@ -102,6 +103,23 @@ Deployment panel for scheduling/removing/applying directives. File → Save/Open
 the versioned world configuration and queued directives as `*.sphere.json`; File → Export Metrics
 writes coverage watcher samples as CSV.
 
+### Run the volumetric Space platform
+
+```bash
+dotnet run --project src/SensorAnalysis.Space.App
+```
+
+`SensorAnalysis.Space.slnx` is a separate, clean-slate platform for a wrapped cubic 3-torus
+(Y-up, right-handed). It does not reference the rectangular or spherical stacks. Default New World
+runs `WorldInitializer` **PlanetoidBelt**: an anchored spinning planetoid at the origin, a slow
+Keplerian asteroid belt in the XZ plane, and a few inertial random-walk weavers with a Δv throttle.
+The viewport uses stock WPF `Viewport3D` (no extra 3D package): isometric orbit about a focus
+(arrows / left-drag, pitch clamped 20° from the poles), Shift+LMB or MMB pan, wheel zoom, Home reset,
+optional Follow (camera tracks selection without changing the look vector), and a toggleable Fly
+god-mode (WASD + Q/E). Click an inhabitant to select it (wire box, no filled overlay). New World
+can also pick **ToroidalStream**: no gravity; asteroids coast through the origin along one axis
+and wrap. RGB axes stay a constant on-screen size.
+
 ### Publish CLI next to the Trust paper repo
 
 ```bash
@@ -160,6 +178,11 @@ CLI prints an approximate disk-cover scale `n*` (sparse ≈ agents ≪ `n*`).
 | `HerdingDeceptive` | Uniform-random deploy; **local sensing only** (no oracle); **no drain**; one lure decoy per victim away from a visible event; hold / orbit / standoff / herd from what is in range |
 | `HerdingDeceptiveOracle` | Same lure geometry with **`IIncidentOracle`** omniscience — kept for A/B, not the paper default |
 | `MitigatedOrbit` | Orbiting coop + Beta–Bernoulli trust; silence detection; false-lure disappointment; **authenticated disappointment gossip** (receivers accept only live `MitigatedOrbit` senders) |
+| `PersonalSpaceCoop` / `CrowdOnlyDeceptive` / `CrowdAwareMitigated` | First-principles P-only stack (no radio) |
+| `ProgressCoop` / `ProgressLoiterDeceptive` / `ProgressAwareMitigated` | Local cue-intensity shrink; loiter without drain; Beta on “present, no shrink” |
+| `LloydCoop` / `LloydParkDeceptive` | Limited-range Voronoi of the sensing disc |
+| `PheromoneCoop` / `PheromoneFakeDeceptive` | Unsigned decaying field (`SimWorld.Pheromones`); no speaker id |
+| `BoidsCoop` / `BoidsPeelDeceptive` / `BoidsAwareMitigated` | Align + cohere + separate; peel adversary; trust on heading mismatch |
 
 ### Simpler / legacy reference
 
@@ -217,6 +240,9 @@ Trust helper: `experiments/record-regime-clips.ps1` writes one AVI per regime un
 | `Connectivity` | pair counts / degree |
 | `Clearance` | fraction cleared, all-clear tick (end-of-trial sentinel `tick=-1`) |
 | `TrustTel` | fraction cleared, mean mitigated trust vs deceptive peers, **vs other mitigated peers**, disappointment echoes |
+| `CrowdIntrusion` | inside-PS ticks vs consecutive-closing herding offenses |
+| `ProgressStall` | co-presence vs progress-offense counts |
+| `LloydOccupancy` / `PheromoneField` / `BoidsPeel` | literature-channel telemetry |
 
 Export folder:
 

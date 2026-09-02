@@ -1,0 +1,80 @@
+<Window x:Class="SensorAnalysis.Space.App.Views.WorldOptionsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="New World Options" SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        MinWidth="420" ShowInTaskbar="False">
+  <Grid Margin="12">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto"/>
+      <ColumnDefinition Width="230"/>
+    </Grid.ColumnDefinitions>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Title" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="1" Text="Seed" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Seed, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="2" Text="Cubes per axis" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CubesPerAxis, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="3" Text="Cube size" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding CubeSize, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="4" Text="Initializer" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <ComboBox Grid.Row="4" Grid.Column="1" SelectedIndex="{Binding KindIndex}" Margin="0,4">
+      <ComboBoxItem Content="PlanetoidBelt"/>
+      <ComboBoxItem Content="ToroidalStream"/>
+      <ComboBoxItem Content="Empty"/>
+    </ComboBox>
+
+    <TextBlock Grid.Row="5" Text="Drift axis" VerticalAlignment="Center" Margin="0,4,12,4"
+               ToolTip="Axis of the wrapping convoy (ToroidalStream)"/>
+    <ComboBox Grid.Row="5" Grid.Column="1" SelectedIndex="{Binding DriftAxisIndex}" Margin="0,4">
+      <ComboBoxItem Content="X"/>
+      <ComboBoxItem Content="Y"/>
+      <ComboBoxItem Content="Z"/>
+    </ComboBox>
+
+    <TextBlock Grid.Row="6" Text="Asteroids" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding AsteroidCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="7" Text="Weaver agents" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding AgentCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="8" Text="Period (ticks)" VerticalAlignment="Center" Margin="0,4,12,4"
+               ToolTip="Belt orbit period, or time for a stream asteroid to cross the world"/>
+    <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding OrbitPeriodTicks, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="9" Text="Default sensor r" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding SensorRange, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="10" Text="Field of view °" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding FieldOfView, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="11" Grid.ColumnSpan="2" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,10,0,4" Opacity="0.8"/>
+
+    <StackPanel Grid.Row="12" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+      <Button Content="OK" IsDefault="True" Width="72" Margin="0,0,8,0" Click="Ok_Click"
+              IsEnabled="{Binding CanAccept}"/>
+      <Button Content="Cancel" IsCancel="True" Width="72" Click="Cancel_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>

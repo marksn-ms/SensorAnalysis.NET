@@ -197,4 +197,11 @@ public sealed class AgentDeployDefaults
     /// <summary>Sensor range assigned to placed agents.</summary>
     [DeployableParam("Sensor range")]
     public double SensorRange { get; set; } = 80;
+
+    /// <summary>
+    /// Maximum agents that may share one event (orbiting cooperative agents only).
+    /// </summary>
+    [DeployableParam("Max share event", Required = false,
+        Description = "Max agents per event for OrbitingCoop / MitigatedOrbit.")]
+    public int MaxShareEvent { get; set; } = 3;
 }

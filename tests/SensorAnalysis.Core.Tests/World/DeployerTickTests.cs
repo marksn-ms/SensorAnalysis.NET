@@ -193,6 +193,61 @@ public class DeployerTickTests
     {
         var props = DeployableParameterCatalog.Describe(typeof(AgentDeployDefaults));
         props.Should().Contain(p => p.Name == "SensorRange");
+        props.Should().Contain(p => p.Name == "MaxShareEvent");
+    }
+
+    [Fact]
+    public void UniformDeployer_MinDistance_SpacesIncidentsApart()
+    {
+        var w = new SimWorld(new WorldOptions
+        {
+            TileCount = new GridSize(8, 8),
+            TileSizePx = new GridSize(25, 25)
+        }, seed: 99);
+
+        var uniform = new UniformDeployer();
+        uniform.Attach(w, new UniformDeployOptions
+        {
+            Count = 4,
+            TypeName = "Incident",
+            MinDistance = 80
+        }, Ctx());
+
+        w.Incidents.Should().HaveCount(4);
+        for (int i = 0; i < w.Incidents.Count; i++)
+        {
+            for (int j = i + 1; j < w.Incidents.Count; j++)
+            {
+                w.Distance(w.Incidents[i].Position, w.Incidents[j].Position)
+                    .Should().BeGreaterThanOrEqualTo(80 - 1e-6);
+            }
+        }
+    }
+
+    [Fact]
+    public void AgentDeployableFactory_AppliesMaxShareEvent_ToOrbitingCoop()
+    {
+        var registry = BuiltinCatalog.CreateDeployables();
+        var w = new SimWorld(new WorldOptions
+        {
+            TileCount = new GridSize(4, 4),
+            TileSizePx = new GridSize(25, 25)
+        }, seed: 1);
+
+        registry.Deploy(w, "OrbitingCoop", new DeployableSpawnRequest
+        {
+            Position = new Vec2(10, 10),
+            Label = "oc",
+            Parameters = new Dictionary<string, object?>
+            {
+                ["SensorRange"] = 80.0,
+                ["MaxShareEvent"] = 1
+            },
+            Rng = w.Random
+        });
+
+        var agent = w.Agents.OfType<OrbitingCoopAgent>().Single();
+        agent.MaxShareEvent.Should().Be(1);
     }
 
     [Fact]

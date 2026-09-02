@@ -6,10 +6,15 @@ using SensorAnalysis.Core.Sensing;
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Honest squad searcher: personal-space exploration, orbit commitments at r/2,
-/// bird-in-hand join, and smart-but-naive rebalancing while committed.
-/// Tracks a list of <see cref="EventHypothesis"/> entries (sensor cues and radio rumors).
-/// Missing a ping for a tick does not clear a belief; unconfirmed rumors decay back to search.
+/// OrbitingCoopAgent is a naive, cooperative agent:  Assumes all the other agents encountered are honest.
+/// Searches using random walk, but observes other agents' personal-space while exploring.
+/// When an event is discovered, orbit commences at r/2 radius, but still tries to observe
+/// personal space of other agents.  If there are already 3 agents orbiting the same event,
+/// it will break off and return to searching.  If a message is heard (in range) about a new event, 
+/// it will move to assist.  While responding, it will observe the personal space of other agents.
+/// Thus, the modalities are: 1) exploring, 2) exploring/avoiding, 3) assisting, 4) assisting/avoiding, 
+/// 5) orbiting, 6) orbiting/avoiding.  We could then consider avoiding as an aspect of the other 
+/// modalities since it modifies each one.
 /// </summary>
 public class OrbitingCoopAgent : Agent
 {
@@ -48,19 +53,13 @@ public class OrbitingCoopAgent : Agent
         MessageEchoTtl = 40;
     }
 
-    /// <summary>How many nearer peers block a bird-in-hand join (default 2 ⇒ up to 3 orbiters).</summary>
-    public int MaxOthersCloserToJoin { get; set; } = 2;
+    /// <summary>Maximum agents that may share one event before yielding (default 3).</summary>
+    public int MaxShareEvent { get; set; } = 3;
 
-    /// <summary>Maximum agents that should stay on one event (default = MaxOthersCloserToJoin + 1).</summary>
-    public int MaxOrbiters => MaxOthersCloserToJoin + 1;
+    /// <summary>How many nearer peers block a bird-in-hand join (<c>MaxShareEvent - 1</c>).</summary>
+    protected int MaxOthersCloserToJoin => Math.Max(0, MaxShareEvent - 1);
 
-    /// <summary>
-    /// Minimum engagement advantage (others closer on current minus others closer on candidate)
-    /// required to switch while committed. Default 2 ⇒ leave when current is crowded and candidate is free.
-    /// </summary>
-    public int SwitchAdvantage { get; set; } = 2;
-
-    /// <summary>Ticks to wait after a switch/break before switching again (anti-thrash).</summary>
+    /// <summary>Ticks to wait after a break before re-evaluating overcrowding (anti-thrash).</summary>
     public int SwitchCooldownTicks { get; set; } = 12;
 
     /// <summary>
@@ -70,7 +69,7 @@ public class OrbitingCoopAgent : Agent
     {
         BindContext(ctx);
         var observation = ctx.World.Observe(this);
-        Hypotheses.AssociationRadius = Math.Max(12, SensorRange * 0.35);
+        Hypotheses.AssociationRadius = CooperativeRadii.AssociationRadius(SensorRange);
 
         OnBeforeSearch(ctx, observation);
 
@@ -83,7 +82,6 @@ public class OrbitingCoopAgent : Agent
         Hypotheses.DecayAndPrune();
 
         MaybeRebalanceOvercrowd(ctx, observation);
-        MaybeRetarget(ctx, observation);
         MaybeCommitBest(ctx, observation);
         MaybeDropStaleCommitment(ctx);
 
@@ -92,7 +90,7 @@ public class OrbitingCoopAgent : Agent
 
         OnAfterSearch(ctx, observation);
 
-        var personalSpace = SensorRange * 0.5;
+        var personalSpace = CooperativeRadii.PersonalSpace(SensorRange);
         LastAction = ChooseAction(observation, personalSpace);
         Position = ctx.World.Wrap(Position + LastAction.ToStep() * Velocity);
         TotalReward += observation.InstantReward;
@@ -161,7 +159,7 @@ public class OrbitingCoopAgent : Agent
     }
 
     /// <summary>
-    /// If more than <see cref="MaxOrbiters"/> agents are on-station, or the pack is
+    /// If more than <see cref="MaxShareEvent"/> agents are on-station, or the pack is
     /// tightly clumped, yield and resume exploration (keeps ~120° spacing intent).
     /// </summary>
     protected virtual void MaybeRebalanceOvercrowd(WorldContext ctx, AgentObservation observation)
@@ -170,13 +168,13 @@ public class OrbitingCoopAgent : Agent
         if (SwitchCooldownRemaining > 0) return;
         if (Hypotheses.Get(id) is null) return;
 
-        var orbitRadius = SensorRange * 0.5;
+        var orbitRadius = CooperativeRadii.OrbitRadius(SensorRange);
         var stationRadius = orbitRadius * 1.2;
         var center = RelativeCommittedCenter(observation);
         var onStation = CountAgentsNear(observation, center, stationRadius);
         var total = onStation + 1;
 
-        var overcrowded = total > MaxOrbiters && ShouldYieldStation(observation, center, stationRadius);
+        var overcrowded = total > MaxShareEvent && ShouldYieldStation(observation, center, stationRadius);
         var tightlyClumped = false;
         if (!overcrowded && total >= 2)
         {
@@ -194,36 +192,6 @@ public class OrbitingCoopAgent : Agent
 
         BreakOff(ctx, id);
         SwitchCooldownRemaining = SwitchCooldownTicks;
-    }
-
-    /// <summary>While committed, switch to a less-engaged hypothesis when advantage is clear.</summary>
-    protected virtual void MaybeRetarget(WorldContext ctx, AgentObservation observation)
-    {
-        if (CommittedIncidentId is not int currentId) return;
-        if (SwitchCooldownRemaining > 0) return;
-        var current = Hypotheses.Get(currentId);
-        if (current is null) return;
-
-        var currentEngagement = CountOthersCloser(
-            observation, observation.RelativeFromAbsolute(current.Estimate));
-
-        EventHypothesis? best = null;
-        var bestEngagement = int.MaxValue;
-        foreach (var h in Hypotheses.Items)
-        {
-            if (h.LocalId == currentId) continue;
-            if (h.Confidence < Hypotheses.SuspectThreshold) continue;
-            var eng = CountOthersCloser(observation, observation.RelativeFromAbsolute(h.Estimate));
-            if (eng >= MaxOthersCloserToJoin) continue;
-            if (eng >= bestEngagement) continue;
-            bestEngagement = eng;
-            best = h;
-        }
-
-        if (best is null) return;
-        if (currentEngagement - bestEngagement < SwitchAdvantage) return;
-
-        SwitchTo(ctx, observation, best, announceContact: true, reportSenderId: best.LastInformantId);
     }
 
     /// <summary>Commit to the strongest plausible hypothesis when free.</summary>
@@ -285,7 +253,7 @@ public class OrbitingCoopAgent : Agent
         var track = Hypotheses.Get(id);
         if (track is null) return;
 
-        var orbitRadius = SensorRange * 0.5;
+        var orbitRadius = CooperativeRadii.OrbitRadius(SensorRange);
         var target = RelativeCommittedCenter(observation);
         if (observation.DistanceTo(target) > orbitRadius * 1.15)
             return;
@@ -328,21 +296,33 @@ public class OrbitingCoopAgent : Agent
     {
         if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
-            var orbitRadius = SensorRange * 0.5;
+            var orbitRadius = CooperativeRadii.OrbitRadius(SensorRange);
             var target = RelativeCommittedCenter(observation);
             var dist = observation.DistanceTo(target);
+            var neighbors = NeighborsForPersonalSpace(observation);
+            AgentAction preferred;
             if (track.Confidence >= Hypotheses.OrbitThreshold || dist <= orbitRadius * 1.2)
             {
-                return Steering.OrbitClockwise(target, orbitRadius, observation);
+                preferred = Steering.OrbitClockwise(target, orbitRadius, observation);
+            }
+            else
+            {
+                preferred = Steering.DirectionToward(observation.DisplacementTo(target));
             }
 
-            return Steering.DirectionToward(observation.DisplacementTo(target));
+            return Steering.RespectPersonalSpace(
+                preferred,
+                neighbors,
+                personalSpace,
+                Velocity,
+                observation,
+                peer => ShouldYieldPersonalSpace(observation, peer, target, personalSpace));
         }
 
         return Steering.ExploreWithPersonalSpace(
             _exploreHeading,
             _explorePersist,
-            observation.NearbyAgents,
+            NeighborsForPersonalSpace(observation),
             personalSpace,
             Velocity,
             observation,
@@ -350,6 +330,32 @@ public class OrbitingCoopAgent : Agent
             HeadingChangeInterval,
             out _exploreHeading,
             out _explorePersist);
+    }
+
+    /// <summary>Peers considered for personal-space yielding (all nearby agents for naive).</summary>
+    protected virtual IReadOnlyList<AgentInfo> NeighborsForPersonalSpace(AgentObservation observation) =>
+        observation.NearbyAgents;
+
+    /// <summary>
+    /// True when this agent should slow/stay so <paramref name="peer"/> can keep the preferred task motion.
+    /// Farther from the event yields to closer; equal range ties break on agent id.
+    /// </summary>
+    protected virtual bool ShouldYieldPersonalSpace(
+        AgentObservation observation,
+        AgentInfo peer,
+        Vec2 eventCenterRelative,
+        double personalSpace)
+    {
+        if (observation.DistanceTo(peer.Position) >= personalSpace)
+            return false;
+
+        var selfToEvent = observation.DistanceTo(eventCenterRelative);
+        var peerToEvent = observation.DistanceBetween(peer.Position, eventCenterRelative);
+        if (peerToEvent + 1e-6 < selfToEvent)
+            return true;
+        if (selfToEvent + 1e-6 < peerToEvent)
+            return false;
+        return Id > peer.Id;
     }
 
     /// <summary>Commit to a hypothesis and optionally radio first contact.</summary>
@@ -367,35 +373,6 @@ public class OrbitingCoopAgent : Agent
         }
     }
 
-    /// <summary>Break current commitment (if any) and commit to a new hypothesis.</summary>
-    protected void SwitchTo(
-        WorldContext ctx,
-        AgentObservation observation,
-        EventHypothesis track,
-        bool announceContact,
-        int? reportSenderId)
-    {
-        if (CommittedIncidentId is int oldId && oldId != track.LocalId)
-            BreakOff(ctx, oldId);
-
-        Commit(ctx, track, announceContact);
-        SwitchCooldownRemaining = SwitchCooldownTicks;
-
-        if (reportSenderId is int sid)
-        {
-            var targetRelative = observation.RelativeFromAbsolute(track.Estimate);
-            var synthetic = new MessageInfo(
-                Id: -1,
-                Position: track.Estimate,
-                FromType: string.Empty,
-                FromAgentId: sid,
-                ToAgentId: null,
-                Payload: RadioNet.FormatContact(track.LocalId, track.Estimate),
-                TtlRemaining: MessageEchoTtl);
-            OnFollowedReport(synthetic, targetRelative, track.LocalId);
-        }
-    }
-
     /// <summary>Clear commitment and announce break.</summary>
     protected virtual void BreakOff(WorldContext ctx, int incidentId)
     {
@@ -405,22 +382,16 @@ public class OrbitingCoopAgent : Agent
         ctx.World.Transmit(this, RadioNet.FormatBreak(incidentId), MessageEchoTtl);
     }
 
-    /// <summary>Last estimate of the current commitment in observer-relative coords, nudged by a nearby cue if any.</summary>
+    /// <summary>
+    /// Smoothed commitment estimate in observer-relative coords.
+    /// Uses <see cref="EventHypothesis.Estimate"/> (updated by cue/rumor ingest), not raw per-tick cues.
+    /// </summary>
     protected Vec2 RelativeCommittedCenter(AgentObservation observation)
     {
         if (CommittedIncidentId is int id && Hypotheses.Get(id) is { } track)
         {
-            var centerRelative = observation.RelativeFromAbsolute(track.Estimate);
-            var near = NearestCue(observation, centerRelative, SensorRange * 0.5);
-            if (near is { } cueRelative)
-            {
-                track.Estimate = observation.AbsoluteFromRelative(cueRelative);
-                CommittedPosition = track.Estimate;
-                return cueRelative;
-            }
-
             CommittedPosition = track.Estimate;
-            return centerRelative;
+            return observation.RelativeFromAbsolute(track.Estimate);
         }
 
         return observation.RelativeFromAbsolute(CommittedPosition);
@@ -449,7 +420,7 @@ public class OrbitingCoopAgent : Agent
             observation.DistanceBetween(a.Position, centerRelative) <= radius);
 
     /// <summary>
-    /// True when self is not among the <see cref="MaxOrbiters"/> closest agents to the event
+    /// True when self is not among the <see cref="MaxShareEvent"/> closest agents to the event
     /// (so we should yield the station).
     /// </summary>
     protected bool ShouldYieldStation(AgentObservation observation, Vec2 centerRelative, double stationRadius)
@@ -460,30 +431,13 @@ public class OrbitingCoopAgent : Agent
             var d = observation.DistanceBetween(a.Position, centerRelative);
             return d <= stationRadius && d <= selfDist + 1e-6;
         });
-        return closerOrEqualPeers + 1 > MaxOrbiters;
+        return closerOrEqualPeers + 1 > MaxShareEvent;
     }
 
     /// <summary>True when a cue this tick lands near <paramref name="centerRelative"/>.</summary>
     protected static bool AnyCueNear(AgentObservation observation, Vec2 centerRelative, double radius) =>
         observation.NearbyIncidents.Any(c =>
             observation.DistanceBetween(c.Position, centerRelative) <= radius);
-
-    private static Vec2? NearestCue(AgentObservation observation, Vec2 centerRelative, double radius)
-    {
-        Vec2? best = null;
-        var bestD = double.PositiveInfinity;
-        foreach (var c in observation.NearbyIncidents)
-        {
-            var d = observation.DistanceBetween(c.Position, centerRelative);
-            if (d <= radius && d < bestD)
-            {
-                bestD = d;
-                best = c.Position;
-            }
-        }
-
-        return best;
-    }
 }
 
 /// <summary>Factory for <see cref="OrbitingCoopAgent"/>.</summary>

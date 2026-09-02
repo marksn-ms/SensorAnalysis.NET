@@ -4,7 +4,7 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Core.Deployment;
 
 /// <summary>Options for <see cref="PeriodicDeployer"/>.</summary>
-public sealed class PeriodicDeployOptions
+public sealed class PeriodicDeployOptions : DeployerOptionsBase
 {
     /// <summary>Ticks between waves (including a wave at tick 0).</summary>
     [DeployerParam("Period (ticks)", Description = "Spawn on ticks 0, N, 2N, …")]
@@ -67,16 +67,25 @@ public sealed class PeriodicDeployer : IDeployer
         var rng = ctx.Rng;
         var o = _options;
         var deployableParams = _context.ParametersFor(o.TypeName);
+        var avoid = IncidentPlacementHelper.CollectOccupiedPositions(_world);
 
         for (int i = 0; i < o.Count; i++)
         {
+            var position = IncidentPlacementHelper.PlaceWithMinSpacing(
+                _world,
+                rng,
+                () => IncidentPlacementHelper.PlaceUniform(_world, rng),
+                o.MinDistance,
+                avoid);
+
             _context.Deployables.Deploy(_world, o.TypeName, new DeployableSpawnRequest
             {
-                Position = IncidentPlacementHelper.PlaceUniform(_world, rng),
+                Position = position,
                 Label = $"obj-w{_waveIndex}-{i}",
                 Parameters = deployableParams,
                 Rng = rng
             });
+            avoid.Add(position);
         }
 
         _waveIndex++;

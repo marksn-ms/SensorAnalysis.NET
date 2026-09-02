@@ -10,18 +10,8 @@ namespace SensorAnalysis.Agents.Strategies;
 /// </summary>
 public sealed class RandomWalkAgent : Agent
 {
-    // Compass ring matching AgentAction: N, NE, E, SE, S, SW, W, NW.
-    private static readonly AgentAction[] Compass =
-    [
-        AgentAction.North,
-        AgentAction.NorthEast,
-        AgentAction.East,
-        AgentAction.SouthEast,
-        AgentAction.South,
-        AgentAction.SouthWest,
-        AgentAction.West,
-        AgentAction.NorthWest
-    ];
+    // Sixteen-point compass ring in clockwise order starting at north.
+    private static readonly AgentAction[] Compass = AgentActionExtensions.MovementDirections;
 
     private int _heading;
     private bool _headingInitialized;
@@ -64,7 +54,7 @@ public sealed class RandomWalkAgent : Agent
         else if (roll < 0.998)
             delta = -3;
         else if (roll < 0.999)
-            delta = 4; // reverse
+            delta = Compass.Length / 2; // reverse
         else
             return AgentAction.Stay;
 

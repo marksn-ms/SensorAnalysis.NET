@@ -4,7 +4,7 @@ using SensorAnalysis.Core.World;
 namespace SensorAnalysis.Core.Deployment;
 
 /// <summary>Options for <see cref="PlaceNearDeployer"/>.</summary>
-public sealed class PlaceNearOptions
+public sealed class PlaceNearOptions : DeployerOptionsBase
 {
     /// <summary>Objects per wave (or once when <see cref="PeriodTicks"/> is 0).</summary>
     [DeployerParam("Count")]
@@ -112,13 +112,19 @@ public sealed class PlaceNearDeployer : IDeployer
         var o = _options!;
         var rng = world.Random;
         var deployableParams = _context!.ParametersFor(o.TypeName);
+        var avoid = IncidentPlacementHelper.CollectOccupiedPositions(world);
 
         for (int i = 0; i < o.Count; i++)
         {
-            var position = o.RoundRobinHosts
-                ? PlaceRoundRobin(world, rng, o)
-                : IncidentPlacementHelper.PlaceNearType(
-                    world, rng, o.NearTypeName, o.RangeFactor);
+            var position = IncidentPlacementHelper.PlaceWithMinSpacing(
+                world,
+                rng,
+                () => o.RoundRobinHosts
+                    ? PlaceRoundRobin(world, rng, o)
+                    : IncidentPlacementHelper.PlaceNearType(
+                        world, rng, o.NearTypeName, o.RangeFactor),
+                o.MinDistance,
+                avoid);
 
             _context.Deployables.Deploy(world, o.TypeName, new DeployableSpawnRequest
             {
@@ -127,6 +133,7 @@ public sealed class PlaceNearDeployer : IDeployer
                 Parameters = deployableParams,
                 Rng = rng
             });
+            avoid.Add(position);
         }
     }
 

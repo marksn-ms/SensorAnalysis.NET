@@ -1,3 +1,4 @@
+using SensorAnalysis.Agents.Strategies;
 using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Domain;
@@ -31,6 +32,8 @@ public sealed class AgentDeployableFactory : IDeployableFactory
         var agent = _inner.Create(request.Label);
         agent.Position = request.Position;
         agent.SensorRange = defaults.SensorRange;
+        if (agent is OrbitingCoopAgent orbiting)
+            orbiting.MaxShareEvent = Math.Max(1, defaults.MaxShareEvent);
         return agent;
     }
 

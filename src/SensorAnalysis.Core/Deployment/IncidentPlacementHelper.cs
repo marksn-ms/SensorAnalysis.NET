@@ -80,4 +80,71 @@ public static class IncidentPlacementHelper
         return !world.Incidents.Any(i =>
             !i.IsDepleted && world.Distance(i.Position, host.Position) <= radius);
     }
+
+    /// <summary>Positions of all living agents and active incidents.</summary>
+    /// <param name="world">Target world.</param>
+    public static List<Vec2> CollectOccupiedPositions(SimWorld world)
+    {
+        var positions = new List<Vec2>(world.Agents.Count + world.Incidents.Count);
+        foreach (var agent in world.Agents)
+            positions.Add(agent.Position);
+        foreach (var incident in world.Incidents)
+        {
+            if (!incident.IsDepleted)
+                positions.Add(incident.Position);
+        }
+
+        return positions;
+    }
+
+    /// <summary>
+    /// Samples a position via <paramref name="candidateFactory"/> until it is at least
+    /// <paramref name="minDistance"/> from every point in <paramref name="avoid"/>,
+    /// or <see cref="IDeployer.MaxPlacementRetries"/> attempts are exhausted.
+    /// </summary>
+    /// <param name="world">Target world (toroidal distance).</param>
+    /// <param name="rng">Deterministic RNG.</param>
+    /// <param name="candidateFactory">Produces a candidate position each attempt.</param>
+    /// <param name="minDistance">Minimum separation (0 disables and returns the first candidate).</param>
+    /// <param name="avoid">Existing and co-wave positions to respect.</param>
+    public static Vec2 PlaceWithMinSpacing(
+        SimWorld world,
+        Random rng,
+        Func<Vec2> candidateFactory,
+        double minDistance,
+        IReadOnlyList<Vec2> avoid)
+    {
+        if (minDistance <= 0 || avoid.Count == 0)
+            return candidateFactory();
+
+        var minDist = minDistance;
+        var attempts = Math.Max(1, IDeployer.MaxPlacementRetries);
+        Vec2 fallback = candidateFactory();
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            var candidate = attempt == 0 ? fallback : candidateFactory();
+            if (attempt == 0)
+                fallback = candidate;
+
+            if (IsSpaced(world, candidate, avoid, minDist))
+                return candidate;
+        }
+
+        return fallback;
+    }
+
+    private static bool IsSpaced(
+        SimWorld world,
+        Vec2 candidate,
+        IReadOnlyList<Vec2> avoid,
+        double minDistance)
+    {
+        foreach (var other in avoid)
+        {
+            if (world.Distance(candidate, other) < minDistance)
+                return false;
+        }
+
+        return true;
+    }
 }

@@ -21,6 +21,10 @@
         <MenuItem Header="_Run" Click="Run_Click" InputGestureText="F5"/>
         <MenuItem Header="S_top" Click="Stop_Click" InputGestureText="Shift+F5"/>
       </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem x:Name="ViewCenteredMenuItem" Header="_Centered"
+                  IsCheckable="True" IsChecked="True" Click="ViewCentered_Changed"/>
+      </MenuItem>
     </Menu>
 
     <StatusBar DockPanel.Dock="Bottom">
@@ -40,6 +44,11 @@
         <Button Content="Step" Width="50" Click="Step_Click"/>
         <Button x:Name="RunButton" Content="Run" Width="50" Click="Run_Click"/>
         <Button Content="Stop" Width="50" Click="Stop_Click"/>
+        <Separator/>
+        <CheckBox x:Name="ViewCenteredCheckBox" Content="Centered" IsChecked="True"
+                  VerticalAlignment="Center" Margin="4,0"
+                  ToolTip="When on, keep the sphere centered; when off, drag to orbit and follow selection"
+                  Checked="ViewCentered_Changed" Unchecked="ViewCentered_Changed"/>
       </ToolBar>
     </ToolBarTray>
 

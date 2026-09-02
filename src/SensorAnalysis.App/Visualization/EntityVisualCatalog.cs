@@ -64,6 +64,16 @@ public sealed class EntityVisualCatalog
         c.RegisterAgent(new("HerdingDeceptive", EntityMarkerShape.Diamond, 210, 70, 90));
         c.RegisterAgent(new("HerdingDeceptiveOracle", EntityMarkerShape.Diamond, 180, 55, 120));
         c.RegisterAgent(new("CrowdOnlyDeceptive", EntityMarkerShape.Diamond, 230, 100, 60));
+        c.RegisterAgent(new("ProgressCoop", EntityMarkerShape.Circle, 80, 160, 140));
+        c.RegisterAgent(new("ProgressAwareMitigated", EntityMarkerShape.Circle, 40, 170, 155));
+        c.RegisterAgent(new("ProgressLoiterDeceptive", EntityMarkerShape.Diamond, 200, 90, 50));
+        c.RegisterAgent(new("LloydCoop", EntityMarkerShape.Circle, 100, 150, 200));
+        c.RegisterAgent(new("LloydParkDeceptive", EntityMarkerShape.Diamond, 190, 80, 110));
+        c.RegisterAgent(new("PheromoneCoop", EntityMarkerShape.Circle, 120, 160, 80));
+        c.RegisterAgent(new("PheromoneFakeDeceptive", EntityMarkerShape.Diamond, 210, 130, 40));
+        c.RegisterAgent(new("BoidsCoop", EntityMarkerShape.Circle, 85, 125, 210));
+        c.RegisterAgent(new("BoidsAwareMitigated", EntityMarkerShape.Circle, 55, 145, 190));
+        c.RegisterAgent(new("BoidsPeelDeceptive", EntityMarkerShape.Diamond, 200, 60, 100));
 
         // Incidents — triangles by kind (extensible when deployers set IncidentType).
         c.RegisterIncident(new("Incident", EntityMarkerShape.Triangle, 235, 110, 85, 6.5));

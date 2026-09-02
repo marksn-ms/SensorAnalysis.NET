@@ -5,29 +5,34 @@ using SensorAnalysis.Core.Messaging;
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Mitigated orbiting searcher: honest squad tactics plus private Beta–Bernoulli reputation.
-/// Mitigations (direct experience only — no forgeable “name the villain” stimulus):
-/// <list type="bullet">
-/// <item>Verify followed claims; timeout / empty arrival hurts sender trust.</item>
-/// <item>Silence near a true event (narrow: only after we have announced contact/orbit).</item>
-/// <item>Herding intrusion: peer keeps closing after we yield → trust hit; we stop yielding
-/// to low-trust peers (personal-space filter).</item>
-/// <item>Saturated claims: urging a full station → ignore + trust hit (not on-station status).</item>
-/// </list>
-/// Repeat offenders draw escalating penalties; first offenses are soft so teammates can recover.
+/// MitigatedOrbitAgent is a skeptical, cooperative agent:  Assumes all the other agents encountered are honest until proven otherwise.
+/// Searches using random walk, but observes other agents' personal-space while exploring.
+/// When an event is discovered, orbit commences at r/2 radius, but still tries to observe
+/// personal space of other agents.  If there are already 3 agents orbiting the same event,
+/// it will break off and return to searching.  If a message is heard (in range) about a new event, 
+/// it will move to assist.  While responding, it will observe the personal space of other agents.
+/// Thus, the modalities are: 1) exploring, 2) exploring/avoiding, 3) assisting, 4) assisting/avoiding, 
+/// 5) orbiting, 6) orbiting/avoiding.  We could then consider avoiding as an aspect of the other 
+/// modalities since it modifies each one.  Along the way, if trust is lost for another agent,
+/// it will ignore its presence, meaning it will not be considered in avoidance calculation, and
+/// it will not move to assist when the agent reports a new event.  It can continue to lose trust, however.
+/// As time passes, trust can be regained, but trust is lost easily and regained slowly.  Trust is
+/// considered by direct observation only, not by gossip.
+/// Note: if this is problematic, we could set trust regain to be zero or add gossip messages.
 /// </summary>
-public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
+public sealed class MitigatedOrbitAgent : OrbitingCoopAgent, ICrowdIntrusionTelemetry
 {
     private readonly Dictionary<int, BetaTrust> _trust = new();
     private readonly Dictionary<int, int> _offenseCount = new();
     private readonly Dictionary<int, DisreputeBucket> _disreputeToward = new();
     private readonly Dictionary<int, double> _prevPeerDist = new();
     private readonly Dictionary<int, int> _intrusionTicks = new();
+    private readonly Dictionary<int, int> _lifetimeInside = new();
+    private readonly Dictionary<int, int> _lifetimeClosing = new();
+    private readonly Dictionary<int, int> _currentlyInside = new();
     private readonly HashSet<int> _silenceAccusedThisCommitment = new();
     private readonly Dictionary<int, int> _coPresentTicks = new();
     private PendingProbe? _pending;
-    private AgentAction _exploreHeading = AgentAction.Stay;
-    private int _explorePersist;
 
     /// <summary>Creates a mitigated orbiting agent.</summary>
     public MitigatedOrbitAgent()
@@ -67,6 +72,22 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     /// Used by <see cref="Watchers.TrustTelemetryWatcher"/> to separate intramural vs infiltrator damage.
     /// </summary>
     public IReadOnlyDictionary<int, DisreputeBucket> DisreputeToward => _disreputeToward;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> CurrentIntrusionTicks => _intrusionTicks;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> LifetimeInsidePersonalSpaceTicks => _lifetimeInside;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> LifetimeClosingTicks => _lifetimeClosing;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<int, int> CurrentlyInsidePersonalSpace => _currentlyInside;
+
+    /// <inheritdoc />
+    public int HerdingOffenseCountToward(int targetId) =>
+        _disreputeToward.TryGetValue(targetId, out var b) ? b.Herding : 0;
 
     /// <summary>Total penalty weight this agent has applied (all peers, all channels).</summary>
     public double TotalDisreputeWeight
@@ -138,31 +159,11 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             RegisterOffense(sid, ReputationOffenseKind.Saturated);
     }
 
-    /// <summary>
-    /// Explore while yielding personal space only to trusted peers.
-    /// Distrusted agents can still be sensed for intrusion scoring, but do not steer us.
-    /// </summary>
-    protected override AgentAction ChooseAction(AgentObservation observation, double personalSpace)
-    {
-        if (CommittedIncidentId is not null)
-            return base.ChooseAction(observation, personalSpace);
-
-        var trustedNeighbors = observation.NearbyAgents
+    /// <inheritdoc />
+    protected override IReadOnlyList<AgentInfo> NeighborsForPersonalSpace(AgentObservation observation) =>
+        observation.NearbyAgents
             .Where(a => MeanTrust(a.Id) >= TrustThreshold)
             .ToList();
-
-        return Steering.ExploreWithPersonalSpace(
-            _exploreHeading,
-            _explorePersist,
-            trustedNeighbors,
-            personalSpace,
-            Velocity,
-            observation,
-            Rng,
-            HeadingChangeInterval,
-            out _exploreHeading,
-            out _explorePersist);
-    }
 
     /// <summary>
     /// Parking-lot rule: if we are separating/yielding and a peer keeps closing into
@@ -170,7 +171,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
     /// </summary>
     private void ObserveHerdingIntrusions(AgentObservation observation)
     {
-        var personal = SensorRange * 0.5;
+        var personal = CooperativeRadii.PersonalSpace(SensorRange);
         var seen = new HashSet<int>();
 
         foreach (var peer in observation.NearbyAgents)
@@ -183,13 +184,20 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             if (dist >= personal)
             {
                 _intrusionTicks[peer.Id] = 0;
+                _currentlyInside[peer.Id] = 0;
                 continue;
             }
+
+            _currentlyInside[peer.Id] = 1;
+            _lifetimeInside[peer.Id] = _lifetimeInside.GetValueOrDefault(peer.Id) + 1;
 
             // Closing while already inside our space after we had more clearance.
             var closing = dist + 1e-6 < prev;
             if (closing)
+            {
                 _intrusionTicks[peer.Id] = _intrusionTicks.GetValueOrDefault(peer.Id) + 1;
+                _lifetimeClosing[peer.Id] = _lifetimeClosing.GetValueOrDefault(peer.Id) + 1;
+            }
             else if (dist > prev + 0.5)
                 _intrusionTicks[peer.Id] = 0;
 
@@ -206,6 +214,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent
             {
                 _prevPeerDist.Remove(id);
                 _intrusionTicks.Remove(id);
+                _currentlyInside.Remove(id);
             }
         }
     }
@@ -389,7 +398,9 @@ public enum ReputationOffenseKind
     /// <summary>Followed claim failed verification.</summary>
     Verify = 3,
     /// <summary>Soft weight from authenticated disappointment gossip.</summary>
-    Gossip = 4
+    Gossip = 4,
+    /// <summary>Co-present at a station with no extra local cue-intensity shrink.</summary>
+    Progress = 5
 }
 
 /// <summary>Per-peer cumulative penalty counts and weights by <see cref="ReputationOffenseKind"/>.</summary>
@@ -408,6 +419,8 @@ public readonly struct DisreputeBucket
     public int Verify { get; init; }
     /// <inheritdoc cref="Herding"/>
     public int Gossip { get; init; }
+    /// <inheritdoc cref="Herding"/>
+    public int Progress { get; init; }
 
     /// <summary>Penalty weight by kind.</summary>
     public double HerdingWeight { get; init; }
@@ -419,6 +432,8 @@ public readonly struct DisreputeBucket
     public double VerifyWeight { get; init; }
     /// <inheritdoc cref="HerdingWeight"/>
     public double GossipWeight { get; init; }
+    /// <inheritdoc cref="HerdingWeight"/>
+    public double ProgressWeight { get; init; }
 
     /// <summary>Returns a copy with <paramref name="kind"/> incremented by <paramref name="weight"/>.</summary>
     public DisreputeBucket Add(ReputationOffenseKind kind, double weight) => kind switch
@@ -452,6 +467,12 @@ public readonly struct DisreputeBucket
             TotalWeight = TotalWeight + weight,
             Gossip = Gossip + 1,
             GossipWeight = GossipWeight + weight
+        },
+        ReputationOffenseKind.Progress => this with
+        {
+            TotalWeight = TotalWeight + weight,
+            Progress = Progress + 1,
+            ProgressWeight = ProgressWeight + weight
         },
         _ => this with { TotalWeight = TotalWeight + weight }
     };

@@ -66,34 +66,54 @@ public sealed class TrustTelemetryWatcher : IWatcher
         var active = world.Incidents.Count(i => !i.IsDepleted);
         var cleared = initial == 0 ? 1.0 : (double)(initial - active) / initial;
 
-        var mitigated = world.Agents.OfType<MitigatedOrbitAgent>().ToList();
-        var mitigatedIds = mitigated.Select(m => m.Id).ToHashSet();
+        var orbit = world.Agents.OfType<MitigatedOrbitAgent>().ToList();
+        var crowd = world.Agents.OfType<CrowdAwareMitigatedAgent>().ToList();
+        var mitigatedIds = orbit.Select(m => m.Id).Concat(crowd.Select(m => m.Id)).ToHashSet();
         var deceptiveIds = world.Agents
             .Where(a => a.AgentType.Contains("Deceptive", StringComparison.OrdinalIgnoreCase))
             .Select(a => a.Id)
             .ToHashSet();
 
+        var trustFns = new List<Func<int, double>>();
+        foreach (var m in orbit) trustFns.Add(m.MeanTrustToward);
+        foreach (var m in crowd) trustFns.Add(m.MeanTrustToward);
+        var observerIds = orbit.Select(m => m.Id).Concat(crowd.Select(m => m.Id)).ToList();
+
         double meanTrustVsDeceptive = double.NaN;
-        if (mitigated.Count > 0 && deceptiveIds.Count > 0)
+        if (trustFns.Count > 0 && deceptiveIds.Count > 0)
         {
-            meanTrustVsDeceptive = mitigated.Average(m =>
-                deceptiveIds.Average(m.MeanTrustToward));
+            meanTrustVsDeceptive = trustFns.Average(fn =>
+                deceptiveIds.Average(fn));
         }
 
         double meanTrustVsMitigated = double.NaN;
-        if (mitigated.Count >= 2)
+        if (trustFns.Count >= 2)
         {
-            meanTrustVsMitigated = mitigated.Average(m =>
+            meanTrustVsMitigated = 0;
+            int nPairs = 0;
+            for (int i = 0; i < trustFns.Count; i++)
             {
-                var peers = mitigated.Where(o => o.Id != m.Id).Select(o => o.Id).ToList();
-                return peers.Average(m.MeanTrustToward);
-            });
+                double sum = 0;
+                int n = 0;
+                for (int j = 0; j < observerIds.Count; j++)
+                {
+                    if (j == i) continue;
+                    sum += trustFns[i](observerIds[j]);
+                    n++;
+                }
+                if (n > 0)
+                {
+                    meanTrustVsMitigated += sum / n;
+                    nPairs++;
+                }
+            }
+            meanTrustVsMitigated = nPairs == 0 ? double.NaN : meanTrustVsMitigated / nPairs;
         }
 
         var disappointmentEchoes = world.Messages.Count(m =>
             m.Payload.StartsWith("disappointment:", StringComparison.Ordinal));
 
-        var agg = AggregateDisrepute(mitigated, mitigatedIds, deceptiveIds);
+        var agg = AggregateDisrepute(orbit, crowd, mitigatedIds, deceptiveIds);
 
         return new double[]
         {
@@ -101,7 +121,7 @@ public sealed class TrustTelemetryWatcher : IWatcher
             trial,
             active,
             cleared,
-            mitigated.Count,
+            orbit.Count + crowd.Count,
             double.IsNaN(meanTrustVsDeceptive) ? -1 : meanTrustVsDeceptive,
             double.IsNaN(meanTrustVsMitigated) ? -1 : meanTrustVsMitigated,
             disappointmentEchoes,
@@ -115,47 +135,57 @@ public sealed class TrustTelemetryWatcher : IWatcher
     }
 
     private static Agg AggregateDisrepute(
-        List<MitigatedOrbitAgent> mitigated,
+        List<MitigatedOrbitAgent> orbit,
+        List<CrowdAwareMitigatedAgent> crowd,
         HashSet<int> mitigatedIds,
         HashSet<int> deceptiveIds)
     {
         var a = new Agg();
-        foreach (var observer in mitigated)
+        foreach (var observer in orbit)
+            Accrue(observer.Id, observer.DisreputeToward, mitigatedIds, deceptiveIds, ref a);
+        foreach (var observer in crowd)
+            Accrue(observer.Id, observer.DisreputeToward, mitigatedIds, deceptiveIds, ref a);
+        return a;
+    }
+
+    private static void Accrue(
+        int observerId,
+        IReadOnlyDictionary<int, DisreputeBucket> toward,
+        HashSet<int> mitigatedIds,
+        HashSet<int> deceptiveIds,
+        ref Agg a)
+    {
+        foreach (var (targetId, bucket) in toward)
         {
-            foreach (var (targetId, bucket) in observer.DisreputeToward)
+            if (mitigatedIds.Contains(targetId) && targetId != observerId)
             {
-                if (mitigatedIds.Contains(targetId) && targetId != observer.Id)
-                {
-                    a.DisreputeMit += bucket.TotalWeight;
-                    a.OffHerdingMit += bucket.Herding;
-                    a.OffSilenceMit += bucket.Silence;
-                    a.OffSaturatedMit += bucket.Saturated;
-                    a.OffVerifyMit += bucket.Verify;
-                    a.OffGossipMit += bucket.Gossip;
-                    a.WHerdingMit += bucket.HerdingWeight;
-                    a.WSilenceMit += bucket.SilenceWeight;
-                    a.WSaturatedMit += bucket.SaturatedWeight;
-                    a.WVerifyMit += bucket.VerifyWeight;
-                    a.WGossipMit += bucket.GossipWeight;
-                }
-                else if (deceptiveIds.Contains(targetId))
-                {
-                    a.DisreputeDec += bucket.TotalWeight;
-                    a.OffHerdingDec += bucket.Herding;
-                    a.OffSilenceDec += bucket.Silence;
-                    a.OffSaturatedDec += bucket.Saturated;
-                    a.OffVerifyDec += bucket.Verify;
-                    a.OffGossipDec += bucket.Gossip;
-                    a.WHerdingDec += bucket.HerdingWeight;
-                    a.WSilenceDec += bucket.SilenceWeight;
-                    a.WSaturatedDec += bucket.SaturatedWeight;
-                    a.WVerifyDec += bucket.VerifyWeight;
-                    a.WGossipDec += bucket.GossipWeight;
-                }
+                a.DisreputeMit += bucket.TotalWeight;
+                a.OffHerdingMit += bucket.Herding;
+                a.OffSilenceMit += bucket.Silence;
+                a.OffSaturatedMit += bucket.Saturated;
+                a.OffVerifyMit += bucket.Verify;
+                a.OffGossipMit += bucket.Gossip;
+                a.WHerdingMit += bucket.HerdingWeight;
+                a.WSilenceMit += bucket.SilenceWeight;
+                a.WSaturatedMit += bucket.SaturatedWeight;
+                a.WVerifyMit += bucket.VerifyWeight;
+                a.WGossipMit += bucket.GossipWeight;
+            }
+            else if (deceptiveIds.Contains(targetId))
+            {
+                a.DisreputeDec += bucket.TotalWeight;
+                a.OffHerdingDec += bucket.Herding;
+                a.OffSilenceDec += bucket.Silence;
+                a.OffSaturatedDec += bucket.Saturated;
+                a.OffVerifyDec += bucket.Verify;
+                a.OffGossipDec += bucket.Gossip;
+                a.WHerdingDec += bucket.HerdingWeight;
+                a.WSilenceDec += bucket.SilenceWeight;
+                a.WSaturatedDec += bucket.SaturatedWeight;
+                a.WVerifyDec += bucket.VerifyWeight;
+                a.WGossipDec += bucket.GossipWeight;
             }
         }
-
-        return a;
     }
 
     private struct Agg

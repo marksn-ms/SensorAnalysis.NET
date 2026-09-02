@@ -71,11 +71,21 @@ var coverage = new CoverageWatcher(sampleEveryTicks: 1);
 var connectivity = new ConnectivityWatcher(sampleEveryTicks: 5);
 var clearance = new IncidentClearanceWatcher(sampleEveryTicks: 1);
 var trustTel = new TrustTelemetryWatcher(sampleEveryTicks: 5);
+var crowdIntrusion = new CrowdIntrusionWatcher(sampleEveryTicks: 5);
+var progressStall = new ProgressStallWatcher(sampleEveryTicks: 5);
+var lloydOccupancy = new LloydOccupancyWatcher(sampleEveryTicks: 5);
+var pheromoneField = new PheromoneFieldWatcher(sampleEveryTicks: 5);
+var boidsPeel = new BoidsPeelWatcher(sampleEveryTicks: 5);
 var runner = new SimulationRunner();
 runner.AddWatcher(coverage);
 runner.AddWatcher(connectivity);
 runner.AddWatcher(clearance);
 runner.AddWatcher(trustTel);
+runner.AddWatcher(crowdIntrusion);
+runner.AddWatcher(progressStall);
+runner.AddWatcher(lloydOccupancy);
+runner.AddWatcher(pheromoneField);
+runner.AddWatcher(boidsPeel);
 runner.TrialCompleted += trial =>
     Console.WriteLine($"  trial {trial + 1}/{recipe.Trials} done");
 
@@ -99,7 +109,7 @@ var manifest = runner.RunExperiment(new ExperimentRequest
         : recipe.Notes
 });
 
-ExperimentExporter.Export(outDir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel });
+ExperimentExporter.Export(outDir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel, crowdIntrusion, progressStall, lloydOccupancy, pheromoneField, boidsPeel });
 Console.WriteLine($"Exported → {Path.GetFullPath(outDir)}");
 return 0;
 
