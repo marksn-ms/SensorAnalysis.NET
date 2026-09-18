@@ -5,9 +5,10 @@ using SensorAnalysis.Core.Messaging;
 namespace SensorAnalysis.Agents.Strategies;
 
 /// <summary>
-/// Local-only infiltrator: no incident oracle. Motion is a four-state machine on
-/// whether an honest peer and/or an event is in sensor range. Sparse contact
-/// decoys fire once per lure victim, claimed away from the visible event.
+/// Local-only infiltrator: no incident oracle. Once an event is sensed, it latches
+/// that post and stays to guard it (orbit / herd around the last known location)
+/// instead of correlated-walking away on a missed cue. Sparse contact decoys fire
+/// once per lure victim, claimed away from the visible event.
 /// </summary>
 public sealed class HerdingDeceptiveAgent : Agent
 {
@@ -15,6 +16,13 @@ public sealed class HerdingDeceptiveAgent : Agent
     private bool _decoySentForVictim;
     private int _fakeSlot;
     private readonly int[] _fakeIds = { 20_001, 20_002, 20_003, 20_004 };
+    private int _heading;
+    private bool _headingInitialized;
+    private Vec2? _guardAbsolute;
+    private int _ticksWithoutGuardCue;
+
+    /// <summary>Ticks of missed cues before abandoning a latched event post.</summary>
+    public const int GuardPatienceTicks = 48;
 
     /// <summary>Creates a local-observation herding deceptive agent.</summary>
     public HerdingDeceptiveAgent()
@@ -99,10 +107,31 @@ public sealed class HerdingDeceptiveAgent : Agent
     {
         var personal = SensorRange * 0.5;
         var halfRange = SensorRange * 0.5;
+        UpdateGuard(observation);
+        var post = GuardRelative(observation);
 
-        // Mild repulsion from other deceptive agents to prevent hip-lock clumping.
         var deceptivePeers = observation.NearbyAgents.Where(a => IsDeceptive(a.AgentType)).ToList();
-        if (deceptivePeers.Count > 0)
+        var victims = observation.NearbyAgents
+            .Where(a => !IsDeceptive(a.AgentType))
+            .ToList();
+        var hasVictim = victims.Count > 0;
+        var hasPost = post is not null;
+
+        if (!hasVictim && !hasPost)
+            return Steering.CorrelatedWalk(Rng, ref _heading, ref _headingInitialized);
+
+        var center = post ?? EventCenterFallback(observation);
+
+        // Other infiltrators: stay on the orbit ring rather than fleeing the post.
+        if (hasPost && deceptivePeers.Count > 0)
+        {
+            var nearestDog = deceptivePeers
+                .OrderBy(a => observation.DistanceTo(a.Position))
+                .First();
+            if (observation.DistanceTo(nearestDog.Position) < personal * 0.9)
+                return Steering.OrbitClockwise(center, personal, observation);
+        }
+        else if (!hasPost && deceptivePeers.Count > 0)
         {
             var nearestDog = deceptivePeers
                 .OrderBy(a => observation.DistanceTo(a.Position))
@@ -114,29 +143,42 @@ public sealed class HerdingDeceptiveAgent : Agent
             }
         }
 
-        var victims = observation.NearbyAgents
-            .Where(a => !IsDeceptive(a.AgentType))
-            .ToList();
-        var events = observation.NearbyIncidents;
-        var hasVictim = victims.Count > 0;
-        var hasEvent = events.Count > 0;
+        if (!hasVictim)
+            return Steering.OrbitClockwise(center, personal, observation);
 
-        if (!hasVictim && !hasEvent)
-            return LazyLoiter();
-
-        if (!hasVictim && hasEvent)
-        {
-            var target = events
-                .OrderBy(i => observation.DistanceTo(i.Position))
-                .First();
-            return Steering.OrbitClockwise(target.Position, personal, observation);
-        }
-
-        if (hasVictim && !hasEvent)
+        if (!hasPost)
             return StandoffFrom(observation, victims, personal);
 
-        return HerdVisible(observation, victims, events, personal, halfRange);
+        return HerdVisible(observation, victims, center, personal, halfRange);
     }
+
+    private void UpdateGuard(AgentObservation observation)
+    {
+        if (observation.NearbyIncidents.Count > 0)
+        {
+            var nearest = observation.NearbyIncidents
+                .OrderBy(i => observation.DistanceTo(i.Position))
+                .First();
+            _guardAbsolute = observation.AbsoluteFromRelative(nearest.Position);
+            _ticksWithoutGuardCue = 0;
+            return;
+        }
+
+        if (_guardAbsolute is null)
+            return;
+
+        _ticksWithoutGuardCue++;
+        if (_ticksWithoutGuardCue > GuardPatienceTicks)
+            _guardAbsolute = null;
+    }
+
+    private Vec2? GuardRelative(AgentObservation observation) =>
+        _guardAbsolute is Vec2 abs ? observation.RelativeFromAbsolute(abs) : null;
+
+    private static Vec2 EventCenterFallback(AgentObservation observation) =>
+        observation.NearbyIncidents.Count == 0
+            ? Vec2.Zero
+            : observation.NearbyIncidents.OrderBy(i => observation.DistanceTo(i.Position)).First().Position;
 
     private AgentAction StandoffFrom(
         AgentObservation observation,
@@ -153,19 +195,21 @@ public sealed class HerdingDeceptiveAgent : Agent
             return Steering.DirectionToward(away);
         }
 
-        return LazyLoiter();
+        return Steering.CorrelatedWalk(Rng, ref _heading, ref _headingInitialized);
     }
 
     private AgentAction HerdVisible(
         AgentObservation observation,
         List<AgentInfo> victims,
-        IReadOnlyList<IncidentInfo> events,
+        Vec2 eventPos,
         double personal,
         double halfRange)
     {
-        var victim = RankVictim(observation, victims, events);
+        if (observation.NearbyIncidents.Count == 0)
+            return Steering.OrbitClockwise(eventPos, personal, observation);
 
-        var eventPos = events
+        var victim = RankVictim(observation, victims, observation.NearbyIncidents);
+        eventPos = observation.NearbyIncidents
             .OrderBy(i => observation.DistanceBetween(victim.Position, i.Position))
             .First()
             .Position;
@@ -187,20 +231,6 @@ public sealed class HerdingDeceptiveAgent : Agent
         }
 
         return Steering.DirectionToward(observation.DisplacementTo(block));
-    }
-
-    private AgentAction LazyLoiter()
-    {
-        if (Rng.Next(5) != 0)
-            return AgentAction.Stay;
-
-        AgentAction action;
-        do
-        {
-            action = Steering.RandomAction(Rng);
-        } while (action == AgentAction.Stay);
-
-        return action;
     }
 
     private int NextFakeId()
@@ -227,7 +257,7 @@ public sealed class HerdingDeceptiveAgentFactory : IAgentFactory
 
     /// <inheritdoc />
     public string Description =>
-        "Local infiltrator: no oracle; hold/orbit/standoff/herd from what is in sensor range.";
+        "Local infiltrator: latches a sensed event and guards it; decoys when a cooperator is in range.";
 
     /// <inheritdoc />
     public Agent Create(string? label = null) =>

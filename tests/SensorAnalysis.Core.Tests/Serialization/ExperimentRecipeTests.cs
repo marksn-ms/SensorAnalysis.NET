@@ -33,7 +33,7 @@ public class ExperimentRecipeTests
     }
 
     [Fact]
-    public void RoundTrip_PreservesPlaceNearFlags()
+    public void RoundTrip_PreservesPeriodicNearHostFlags()
     {
         var recipe = new ExperimentRecipe
         {
@@ -47,7 +47,7 @@ public class ExperimentRecipeTests
                 new RecipeDirective
                 {
                     AtTick = 0,
-                    Deployer = "PlaceNear",
+                    Deployer = "Periodic",
                     Parameters = new Dictionary<string, object?>
                     {
                         ["Count"] = 3,
@@ -66,12 +66,13 @@ public class ExperimentRecipeTests
             RecipeSerializer.Save(path, recipe);
             var loaded = RecipeSerializer.Load(path);
             var step = RecipeCompiler.CompileSteps(loaded, BuiltinCatalog.CreateDeployers()).Single();
-            var options = (SensorAnalysis.Core.Deployment.PlaceNearOptions)step.Options;
+            var options = (SensorAnalysis.Core.Deployment.PeriodicDeployOptions)step.Options;
             options.Count.Should().Be(3);
             options.NearTypeName.Should().Be("HerdingDeceptive");
             options.RoundRobinHosts.Should().BeTrue();
             options.PeriodTicks.Should().Be(30);
             loaded.World.ExactSensing.Should().BeTrue();
+            loaded.World.DrainPerAgentPerTick.Should().Be(0.01);
         }
         finally
         {

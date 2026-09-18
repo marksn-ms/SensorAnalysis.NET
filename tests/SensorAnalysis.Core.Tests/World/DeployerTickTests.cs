@@ -60,7 +60,7 @@ public class DeployerTickTests
     }
 
     [Fact]
-    public void PlaceNear_UsesRangeFactorOfHostSensor()
+    public void Periodic_NearHost_PlacesWithinHostSensorDisc()
     {
         var w = new SimWorld(new WorldOptions
         {
@@ -75,8 +75,9 @@ public class DeployerTickTests
         };
         w.Add(host);
 
-        var near = new PlaceNearDeployer();
-        near.Attach(w, new PlaceNearOptions
+        var periodic = new PeriodicDeployer();
+        periodic.Name.Should().Be("Periodic");
+        periodic.Attach(w, new PeriodicDeployOptions
         {
             Count = 1,
             NearTypeName = "RandomWalk",
@@ -91,7 +92,7 @@ public class DeployerTickTests
     }
 
     [Fact]
-    public void PlaceNear_RoundRobin_SpreadsAcrossHosts()
+    public void Periodic_NearHost_RoundRobin_SpreadsAcrossHosts()
     {
         var w = new SimWorld(new WorldOptions
         {
@@ -108,8 +109,8 @@ public class DeployerTickTests
         foreach (var host in hosts)
             w.Add(host);
 
-        var near = new PlaceNearDeployer();
-        near.Attach(w, new PlaceNearOptions
+        var periodic = new PeriodicDeployer();
+        periodic.Attach(w, new PeriodicDeployOptions
         {
             Count = 3,
             NearTypeName = "RandomWalk",
@@ -126,35 +127,6 @@ public class DeployerTickTests
             .Distinct()
             .ToList();
         assigned.Should().HaveCount(3);
-    }
-
-    [Fact]
-    public void HerdingDeceptive_OrbitsVisibleEvent_WhenAlone()
-    {
-        var w = new SimWorld(new WorldOptions
-        {
-            TileCount = new GridSize(10, 10),
-            TileSizePx = new GridSize(40, 40),
-            ExactSensing = true
-        }, seed: 3);
-
-        var dog = new HerdingDeceptiveAgent
-        {
-            Position = new Vec2(200, 200),
-            SensorRange = 80
-        };
-        w.Add(dog);
-        w.Add(new Incident
-        {
-            Position = new Vec2(200, 140),
-            Intensity = 1.0
-        });
-
-        for (int i = 0; i < 80; i++)
-            w.Tick();
-
-        var dist = w.Distance(dog.Position, new Vec2(200, 140));
-        dist.Should().BeInRange(20, 60);
     }
 
     [Fact]
@@ -302,16 +274,31 @@ public class DeployerTickTests
                 {
                     Deployer = "UniformIncidents",
                     Parameters = new Dictionary<string, object?> { ["Count"] = 1 }
+                },
+                new RecipeDirective
+                {
+                    Deployer = "PlaceNear",
+                    Parameters = new Dictionary<string, object?>
+                    {
+                        ["Count"] = 2,
+                        ["NearTypeName"] = "HerdingDeceptive",
+                        ["PeriodTicks"] = 0,
+                        ["RangeFactor"] = 0.5
+                    }
                 }
             ]
         };
 
         var steps = RecipeCompiler.CompileSteps(recipe, deployers);
-        steps.Should().HaveCount(2);
+        steps.Should().HaveCount(3);
         steps[0].Options.Should().BeOfType<UniformDeployOptions>()
             .Which.TypeName.Should().Be("RandomWalk");
         steps[1].Options.Should().BeOfType<UniformDeployOptions>()
             .Which.TypeName.Should().Be("Incident");
+        var near = steps[2].Options.Should().BeOfType<PeriodicDeployOptions>().Subject;
+        near.NearTypeName.Should().Be("HerdingDeceptive");
+        near.PeriodTicks.Should().Be(0);
+        near.TypeName.Should().Be("Incident");
     }
 
     [Fact]

@@ -122,6 +122,9 @@ public sealed class RecipeWorld
     /// <summary>Cue-sensing profile (ignored when <see cref="ExactSensing"/> is true).</summary>
     public RecipeSensing Sensing { get; set; } = new();
 
+    /// <summary>Copied onto spawned incidents. Default matches <see cref="Incident.DrainPerAgentPerTick"/>.</summary>
+    public double DrainPerAgentPerTick { get; set; } = 0.01;
+
     /// <summary>Build runtime world options.</summary>
     public WorldOptions ToWorldOptions() => new()
     {
@@ -129,7 +132,8 @@ public sealed class RecipeWorld
         TileCount = new GridSize(TileColumns, TileRows),
         TileSizePx = new GridSize(TileWidthPx, TileHeightPx),
         ExactSensing = ExactSensing,
-        Sensing = Sensing.ToProfile()
+        Sensing = Sensing.ToProfile(),
+        DrainPerAgentPerTick = DrainPerAgentPerTick
     };
 
     /// <summary>Capture world options into a recipe world block.</summary>
@@ -141,7 +145,8 @@ public sealed class RecipeWorld
         TileWidthPx = options.TileSizePx.Width,
         TileHeightPx = options.TileSizePx.Height,
         ExactSensing = options.ExactSensing,
-        Sensing = RecipeSensing.FromProfile(options.Sensing)
+        Sensing = RecipeSensing.FromProfile(options.Sensing),
+        DrainPerAgentPerTick = options.DrainPerAgentPerTick
     };
 }
 
@@ -180,7 +185,7 @@ public sealed class RecipeDirective
     /// <summary>World tick at which to attach (0 = before the first agent step).</summary>
     public long AtTick { get; set; }
 
-    /// <summary>Registered deployer name (Uniform, Gaussian, Periodic, PlaceNear, …). Legacy names (Random, UniformIncidents, PeriodicIncidents) are accepted when loading recipes.</summary>
+    /// <summary>Registered deployer name (Uniform, Gaussian, Periodic, …). Legacy names (Random, UniformIncidents, PeriodicIncidents, PlaceNear, NearHost) are accepted when loading recipes.</summary>
     public string Deployer { get; set; } = "Gaussian";
 
     /// <summary>RNG salt mixed into that deployer (0 matches CLI/GUI default).</summary>

@@ -228,8 +228,7 @@ Trust helper: `experiments/record-regime-clips.ps1` writes one AVI per regime un
 - **Deployment** — one directive / CLI step = one deployer = one kind of thing.
   - **Gaussian** / **Random**: `Count` + `Type` (+ sensor/sigma) for agents.
   - **UniformIncidents**: one-shot uniform incidents.
-  - **PeriodicIncidents**: uniform waves (`Period`, `Count`).
-  - **PlaceNear**: incidents near `NearTypeName` at `RangeFactor` × host sensor range (one-shot or periodic via `PeriodTicks`).
+  - **Periodic**: waves every `PeriodTicks` (`0` = one-shot). Empty `NearTypeName` is a uniform field; otherwise spawn near that living host type (`RangeFactor` × sensor range). Recipe aliases: `PeriodicIncidents`, `PlaceNear`, `NearHost`.
 - **Intel** — `IIncidentOracle` / `WorldIncidentOracle` injects privileged incident lists into deceptive agents without hard-coding IDs in the tick loop.
 
 ## Watchers & export

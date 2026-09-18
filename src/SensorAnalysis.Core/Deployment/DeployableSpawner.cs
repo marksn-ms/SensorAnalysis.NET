@@ -22,6 +22,31 @@ public static class DeployableSpawner
         int count,
         string typeName,
         string labelPrefix,
+        double minDistance = 0) =>
+        Spawn(
+            world,
+            context,
+            count,
+            typeName,
+            labelPrefix,
+            () => IncidentPlacementHelper.PlaceUniform(world, world.Random),
+            minDistance);
+
+    /// <summary>Places <paramref name="count"/> objects using <paramref name="candidateFactory"/>.</summary>
+    /// <param name="world">Target world.</param>
+    /// <param name="context">Deployable registry and parameter bag.</param>
+    /// <param name="count">Number of objects to place.</param>
+    /// <param name="typeName">Deployable registry key.</param>
+    /// <param name="labelPrefix">Prefix for generated object labels.</param>
+    /// <param name="candidateFactory">Produces a candidate position each attempt.</param>
+    /// <param name="minDistance">Minimum spacing from existing and co-wave objects (0 = disabled).</param>
+    public static void Spawn(
+        SimWorld world,
+        DeployContext context,
+        int count,
+        string typeName,
+        string labelPrefix,
+        Func<Vec2> candidateFactory,
         double minDistance = 0)
     {
         var rng = world.Random;
@@ -34,7 +59,7 @@ public static class DeployableSpawner
             var position = IncidentPlacementHelper.PlaceWithMinSpacing(
                 world,
                 rng,
-                () => IncidentPlacementHelper.PlaceUniform(world, rng),
+                candidateFactory,
                 minDistance,
                 avoid);
 

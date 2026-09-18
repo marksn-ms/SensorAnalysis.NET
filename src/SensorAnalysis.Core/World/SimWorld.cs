@@ -412,4 +412,10 @@ public sealed class WorldOptions
     /// Aligns with honest squad <c>MaxShareEvent</c> (default 3). Extra agents in range do not accelerate clearance.
     /// </summary>
     public int MaxDrainingAgentsPerIncident { get; set; } = 3;
+
+    /// <summary>
+    /// Intensity removed per draining agent per tick (then scaled by the multi-agent exponent).
+    /// Default 0.01 ⇒ ~100 ticks for a solo cover of intensity 1.0.
+    /// </summary>
+    public double DrainPerAgentPerTick { get; set; } = 0.01;
 }

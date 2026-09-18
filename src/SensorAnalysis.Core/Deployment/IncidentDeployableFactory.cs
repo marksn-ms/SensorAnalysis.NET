@@ -25,7 +25,12 @@ public sealed class IncidentDeployableFactory : IDeployableFactory
     };
 
     /// <inheritdoc />
-    public void Install(SimWorld world, WorldObject obj) => world.Add((Incident)obj);
+    public void Install(SimWorld world, WorldObject obj)
+    {
+        var incident = (Incident)obj;
+        incident.DrainPerAgentPerTick = world.Options.DrainPerAgentPerTick;
+        world.Add(incident);
+    }
 
     private static string ResolveIncidentType(IReadOnlyDictionary<string, object?> parameters)
     {

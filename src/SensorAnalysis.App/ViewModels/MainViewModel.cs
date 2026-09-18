@@ -82,7 +82,7 @@ public partial class MainViewModel : ObservableObject
         DeployableTypeNames = new ObservableCollection<string>(
             _deployables.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
         DeployerNames = new ObservableCollection<string>(
-            new[] { "Random", "Uniform", "Gaussian", "Periodic", "PlaceNear" }
+            new[] { "Random", "Uniform", "Gaussian", "Periodic" }
                 .Where(n => _deployerFactories.ContainsKey(n))
                 .Distinct(StringComparer.OrdinalIgnoreCase));
 
@@ -265,7 +265,9 @@ public partial class MainViewModel : ObservableObject
         TileSizePx = o.TileSizePx,
         TileShape = o.TileShape,
         ExactSensing = o.ExactSensing,
-        Sensing = o.Sensing.Clone()
+        Sensing = o.Sensing.Clone(),
+        MaxDrainingAgentsPerIncident = o.MaxDrainingAgentsPerIncident,
+        DrainPerAgentPerTick = o.DrainPerAgentPerTick
     };
 
     /// <summary>Clear the radio traffic panel.</summary>
@@ -316,7 +318,7 @@ public partial class MainViewModel : ObservableObject
             out _,
             out _) &&
         ValidateDraftDeployableParams(out _) &&
-        ValidatePlaceNearAnchor(
+        ValidateNearHostAnchor(
             DraftFields.ToDictionary(f => f.Name, f => f.GetBoxedValue(), StringComparer.Ordinal),
             out _);
 
@@ -947,6 +949,9 @@ public partial class MainViewModel : ObservableObject
     {
         if (info.IsDeployableType)
         {
+            IReadOnlyList<string> choices = info.Required
+                ? DeployableTypeNames
+                : new[] { "" }.Concat(DeployableTypeNames).ToList();
             return new DirectiveParameterField(
                 info.Name,
                 info.Label,
@@ -954,7 +959,7 @@ public partial class MainViewModel : ObservableObject
                 info.Description ?? "",
                 info.PropertyType,
                 value,
-                DeployableTypeNames,
+                choices,
                 isDeployableType: true);
         }
 
@@ -1003,22 +1008,19 @@ public partial class MainViewModel : ObservableObject
         }
 
         DraftValidationMessage = ValidateDraftDeployableParams(parameters, out var deployableErr)
-            ? ValidatePlaceNearAnchor(parameters, out var anchorErr)
+            ? ValidateNearHostAnchor(parameters, out var anchorErr)
                 ? ""
                 : anchorErr ?? ""
             : deployableErr ?? "";
     }
 
-    private bool ValidatePlaceNearAnchor(IReadOnlyDictionary<string, object?> parameters, out string? error)
+    private bool ValidateNearHostAnchor(IReadOnlyDictionary<string, object?> parameters, out string? error)
     {
         error = null;
-        if (!string.Equals(DraftDeployerName, "PlaceNear", StringComparison.OrdinalIgnoreCase))
+        if (!DeployerRecipeCompat.HasNearHost(parameters))
             return true;
 
-        if (!parameters.TryGetValue("NearTypeName", out var nearRaw) || nearRaw is null)
-            return true;
-
-        var nearType = nearRaw.ToString();
+        var nearType = parameters["NearTypeName"]!.ToString();
         if (string.IsNullOrWhiteSpace(nearType))
             return true;
 

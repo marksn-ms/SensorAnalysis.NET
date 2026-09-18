@@ -300,18 +300,16 @@ public class OrbitingCoopAgent : Agent
             var target = RelativeCommittedCenter(observation);
             var dist = observation.DistanceTo(target);
             var neighbors = NeighborsForPersonalSpace(observation);
-            AgentAction preferred;
             if (track.Confidence >= Hypotheses.OrbitThreshold || dist <= orbitRadius * 1.2)
             {
-                preferred = Steering.OrbitClockwise(target, orbitRadius, observation);
-            }
-            else
-            {
-                preferred = Steering.DirectionToward(observation.DisplacementTo(target));
+                // On-station: keep circling. Full personal-space Stay would hitch two
+                // orbiters whose spacing is under r/2 (the same number as orbit radius).
+                return Steering.OrbitRespectingPeers(
+                    target, orbitRadius, neighbors, Velocity, observation);
             }
 
-            return Steering.RespectPersonalSpace(
-                preferred,
+            return Steering.ApproachRespectingPeers(
+                target,
                 neighbors,
                 personalSpace,
                 Velocity,

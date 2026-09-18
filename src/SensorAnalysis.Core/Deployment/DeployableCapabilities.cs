@@ -7,12 +7,12 @@ namespace SensorAnalysis.Core.Deployment;
 public static class DeployableCapabilities
 {
     /// <summary>
-    /// <c>true</c> when <paramref name="factory"/> produces objects usable as PlaceNear anchors
+    /// <c>true</c> when <paramref name="factory"/> produces objects usable as near-host anchors
     /// (must expose a readable <c>SensorRange</c> and <c>Position</c>).
     /// </summary>
     /// <param name="factory">Deployable factory to probe.</param>
     /// <param name="reason">Human-readable failure reason when returning <c>false</c>.</param>
-    /// <returns><c>true</c> when the factory's product can anchor PlaceNear placement.</returns>
+    /// <returns><c>true</c> when the factory's product can anchor near-host placement.</returns>
     public static bool SupportsNearAnchor(IDeployableFactory factory, out string? reason)
     {
         WorldObject sample;
@@ -35,7 +35,7 @@ public static class DeployableCapabilities
         if (!HasReadable(sample, nameof(Agent.Position)) ||
             !HasReadable(sample, nameof(Agent.SensorRange)))
         {
-            reason = $"'{factory.Name}' does not expose Position and SensorRange; cannot use as a PlaceNear anchor.";
+            reason = $"'{factory.Name}' does not expose Position and SensorRange; cannot use as a near-host anchor.";
             return false;
         }
 

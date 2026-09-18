@@ -66,7 +66,7 @@ public static class IncidentPlacementHelper
 
     /// <summary>
     /// True when <paramref name="host"/> has no active incident inside the
-    /// PlaceNear jitter radius (rangeFactor × sensor range × 1.15).
+    /// Near-host jitter radius (rangeFactor × sensor range × 1.15).
     /// </summary>
     /// <param name="world">Target world.</param>
     /// <param name="host">Candidate host.</param>

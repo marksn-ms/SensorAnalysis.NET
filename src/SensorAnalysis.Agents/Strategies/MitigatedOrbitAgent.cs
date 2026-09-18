@@ -129,7 +129,7 @@ public sealed class MitigatedOrbitAgent : OrbitingCoopAgent, ICrowdIntrusionTele
     {
         if (msg.FromAgentId is not int sid)
             return 0;
-        return MeanTrust(sid);
+        return MeanTrust(sid) >= TrustThreshold ? 1 : 0;
     }
 
     /// <inheritdoc />

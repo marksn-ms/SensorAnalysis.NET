@@ -68,11 +68,12 @@ public static class BuiltinCatalog
         Add(() => new UniformDeployer());
         Add(() => new GaussianDeployer());
         Add(() => new PeriodicDeployer());
-        Add(() => new PlaceNearDeployer());
 
         map["Random"] = map["Uniform"];
         map["UniformIncidents"] = map["Uniform"];
         map["PeriodicIncidents"] = map["Periodic"];
+        map["PlaceNear"] = map["Periodic"];
+        map["NearHost"] = map["Periodic"];
 
         return map;
     }

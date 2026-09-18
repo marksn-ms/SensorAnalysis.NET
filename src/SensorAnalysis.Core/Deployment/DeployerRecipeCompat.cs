@@ -14,7 +14,9 @@ public static class DeployerRecipeCompat
         {
             ["Random"] = "Uniform",
             ["UniformIncidents"] = "Uniform",
-            ["PeriodicIncidents"] = "Periodic"
+            ["PeriodicIncidents"] = "Periodic",
+            ["PlaceNear"] = "Periodic",
+            ["NearHost"] = "Periodic"
         };
 
     /// <summary>Resolves a deployer factory, accepting legacy names.</summary>
@@ -69,11 +71,9 @@ public static class DeployerRecipeCompat
         {
             case "UNIFORMINCIDENTS":
             case "PERIODICINCIDENTS":
-                if (!map.ContainsKey("TypeName"))
-                    map["TypeName"] = "Incident";
-                break;
-
+            case "PERIODIC":
             case "PLACENEAR":
+            case "NEARHOST":
                 if (!map.ContainsKey("TypeName"))
                     map["TypeName"] = "Incident";
                 break;
@@ -81,4 +81,9 @@ public static class DeployerRecipeCompat
 
         return map;
     }
+
+    /// <summary>True when a parameter bag requests placement near a living host type.</summary>
+    public static bool HasNearHost(IReadOnlyDictionary<string, object?> parameters) =>
+        parameters.TryGetValue("NearTypeName", out var raw) &&
+        !string.IsNullOrWhiteSpace(raw?.ToString());
 }

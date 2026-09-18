@@ -124,7 +124,8 @@ static void PrintUsage()
           SensorAnalysis.Cli --edit [file.json]    edit only; do not run
 
         Directives in the JSON are deployer name + parameter bags (Gaussian, Random,
-        PeriodicIncidents, PlaceNear, UniformIncidents, …). There is no --regime flag.
+        Periodic, Uniform, …). Periodic has an optional Near type for host-relative
+        placement. There is no --regime flag.
 
         The GUI still launches with form defaults when given no file. Pass a recipe JSON
         to SensorAnalysis.App.exe (or File → Open Recipe) only when you want that document.
