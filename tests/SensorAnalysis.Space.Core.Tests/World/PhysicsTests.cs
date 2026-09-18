@@ -145,13 +145,18 @@ public sealed class PhysicsTests
             CubeSize = 20,
             AsteroidCount = 8,
             AgentCount = 0,
-            OrbitPeriodTicks = 200
+            OrbitPeriodTicks = 200,
+            StreamRadius = 40
         };
         var world = new SimWorld(options, seed: 7);
 
         world.Bodies.Should().HaveCount(8);
         world.Bodies.Should().OnlyContain(b => b.ObjectType == "Asteroid" && b.Mu == 0 && !b.IsAnchored);
         world.Agents.Should().BeEmpty();
+
+        var radial = world.Bodies.Select(b => Math.Sqrt(b.Position.Y * b.Position.Y + b.Position.Z * b.Position.Z)).ToArray();
+        radial.Should().OnlyContain(r => r <= options.StreamRadius + 1e-6);
+        radial.Max().Should().BeGreaterThan(options.StreamRadius * 0.35);
 
         var speed = options.Extent / options.OrbitPeriodTicks;
         foreach (var rock in world.Bodies)

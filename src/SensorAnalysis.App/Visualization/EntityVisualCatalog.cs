@@ -52,6 +52,7 @@ public sealed class EntityVisualCatalog
 
         // Agents — circles for cooperative / baseline; diamonds for deceptive / infiltrator cues.
         c.RegisterAgent(new("RandomWalk", EntityMarkerShape.Circle, 140, 150, 165));
+        c.RegisterAgent(new("RandomWalkNoDrain", EntityMarkerShape.Circle, 160, 155, 130));
         c.RegisterAgent(new("GreedyIncident", EntityMarkerShape.Circle, 70, 175, 160));
         c.RegisterAgent(new("Stigmergy", EntityMarkerShape.Circle, 90, 170, 90));
         c.RegisterAgent(new("CooperativeSearch", EntityMarkerShape.Circle, 80, 140, 220));

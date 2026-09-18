@@ -17,6 +17,7 @@ public static class BuiltinCatalog
     {
         var registry = new AgentFactoryRegistry();
         registry.Register(new RandomWalkAgentFactory());
+        registry.Register(new RandomWalkNoDrainAgentFactory());
         registry.Register(new GreedyIncidentAgentFactory());
         registry.Register(new StigmergyAgentFactory());
         registry.Register(new CooperativeSearchAgentFactory());

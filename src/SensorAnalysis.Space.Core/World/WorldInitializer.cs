@@ -147,7 +147,7 @@ public static class WorldInitializer
         SpawnStreamAsteroids(world, options.AsteroidCount, options.DriftAxis);
         world.Record(
             $"Toroidal stream: {options.AsteroidCount} asteroids along {options.DriftAxis}, " +
-            $"crossing in {options.OrbitPeriodTicks:0} ticks.");
+            $"radius {options.StreamRadius:0}, crossing in {options.OrbitPeriodTicks:0} ticks.");
     }
 
     /// <summary>Spawns random-walk weavers at random wrapped positions (used by directives).</summary>
@@ -221,13 +221,15 @@ public static class WorldInitializer
         var along = AxisUnit(axis);
         var (perpA, perpB) = AxisPerps(axis);
         var period = Math.Max(options.OrbitPeriodTicks, 60);
+        var radius = Math.Clamp(options.StreamRadius, 0, half * 0.92);
+        var slot = extent / n;
 
         for (var i = 0; i < n; i++)
         {
-            var s = ((i + 0.5) / n) * extent - half;
-            var o1 = (rng.NextDouble() - 0.5) * 10;
-            var o2 = (rng.NextDouble() - 0.5) * 10;
-            var pos = along * s + perpA * o1 + perpB * o2;
+            var s = ((i + 0.5) / n) * extent - half + (rng.NextDouble() - 0.5) * slot * 0.45;
+            var rho = radius * Math.Sqrt(rng.NextDouble());
+            var theta = rng.NextDouble() * Math.Tau;
+            var pos = along * s + perpA * (rho * Math.Cos(theta)) + perpB * (rho * Math.Sin(theta));
             AddAsteroid(
                 world,
                 world.Wrap(pos),

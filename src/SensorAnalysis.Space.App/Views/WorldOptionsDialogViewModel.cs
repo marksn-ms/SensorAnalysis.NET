@@ -13,6 +13,7 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
     private string _cubeSize = "40";
     private int _kindIndex;
     private int _driftAxisIndex;
+    private string _streamRadius = "120";
     private string _asteroidCount = "28";
     private string _agentCount = "4";
     private string _orbitPeriodTicks = "1200";
@@ -64,6 +65,13 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
     {
         get => _driftAxisIndex;
         set { _driftAxisIndex = value; OnPropertyChanged(); RefreshDerived(); }
+    }
+
+    /// <summary>Gets or sets the ToroidalStream cylinder radius text.</summary>
+    public string StreamRadius
+    {
+        get => _streamRadius;
+        set { _streamRadius = value; OnPropertyChanged(); RefreshDerived(); }
     }
 
     /// <summary>Gets or sets asteroid count text.</summary>
@@ -129,6 +137,7 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
         CubeSize = options.CubeSize.ToString();
         KindIndex = IndexFromKind(options.Kind);
         DriftAxisIndex = (int)options.DriftAxis;
+        StreamRadius = options.StreamRadius.ToString();
         AsteroidCount = options.AsteroidCount.ToString();
         AgentCount = options.AgentCount.ToString();
         OrbitPeriodTicks = options.OrbitPeriodTicks.ToString();
@@ -161,7 +170,9 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
             return;
         }
 
-        Summary = $"{options.CubesPerAxis}³ cubes × {options.CubeSize} · extent {options.Extent:0} · {options.Kind}";
+        Summary = options.Kind == WorldKind.ToroidalStream
+            ? $"{options.CubesPerAxis}³ cubes × {options.CubeSize} · extent {options.Extent:0} · {options.Kind} r={options.StreamRadius:0} along {options.DriftAxis}"
+            : $"{options.CubesPerAxis}³ cubes × {options.CubeSize} · extent {options.Extent:0} · {options.Kind}";
         CanAccept = true;
     }
 
@@ -212,6 +223,12 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
             return false;
         }
 
+        if (!double.TryParse(StreamRadius, out var streamRadius) || streamRadius < 0)
+        {
+            error = "Stream radius must be a non-negative number.";
+            return false;
+        }
+
         if (!double.TryParse(SensorRange, out var sensor) || sensor < 0)
         {
             error = "Sensor range must be non-negative.";
@@ -236,6 +253,7 @@ public sealed class WorldOptionsDialogViewModel : INotifyPropertyChanged
                 2 => WorldAxis.Z,
                 _ => WorldAxis.X
             },
+            StreamRadius = streamRadius,
             AsteroidCount = asteroids,
             AgentCount = agents,
             OrbitPeriodTicks = period,

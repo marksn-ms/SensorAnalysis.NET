@@ -53,25 +53,29 @@
       <ComboBoxItem Content="Z"/>
     </ComboBox>
 
-    <TextBlock Grid.Row="6" Text="Asteroids" VerticalAlignment="Center" Margin="0,4,12,4"/>
-    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding AsteroidCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+    <TextBlock Grid.Row="6" Text="Stream radius" VerticalAlignment="Center" Margin="0,4,12,4"
+               ToolTip="Cylinder radius of the ToroidalStream (world units). Larger = more volume, less of a needle."/>
+    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StreamRadius, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
 
-    <TextBlock Grid.Row="7" Text="Weaver agents" VerticalAlignment="Center" Margin="0,4,12,4"/>
-    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding AgentCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+    <TextBlock Grid.Row="7" Text="Asteroids" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding AsteroidCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
 
-    <TextBlock Grid.Row="8" Text="Period (ticks)" VerticalAlignment="Center" Margin="0,4,12,4"
+    <TextBlock Grid.Row="8" Text="Weaver agents" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding AgentCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+
+    <TextBlock Grid.Row="9" Text="Period (ticks)" VerticalAlignment="Center" Margin="0,4,12,4"
                ToolTip="Belt orbit period, or time for a stream asteroid to cross the world"/>
-    <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding OrbitPeriodTicks, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+    <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding OrbitPeriodTicks, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
 
-    <TextBlock Grid.Row="9" Text="Default sensor r" VerticalAlignment="Center" Margin="0,4,12,4"/>
-    <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding SensorRange, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+    <TextBlock Grid.Row="10" Text="Default sensor r" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding SensorRange, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
 
-    <TextBlock Grid.Row="10" Text="Field of view °" VerticalAlignment="Center" Margin="0,4,12,4"/>
-    <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding FieldOfView, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
+    <TextBlock Grid.Row="11" Text="Field of view °" VerticalAlignment="Center" Margin="0,4,12,4"/>
+    <TextBox Grid.Row="11" Grid.Column="1" Text="{Binding FieldOfView, UpdateSourceTrigger=PropertyChanged}" Margin="0,4"/>
 
-    <TextBlock Grid.Row="11" Grid.ColumnSpan="2" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,10,0,4" Opacity="0.8"/>
+    <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,10,0,4" Opacity="0.8"/>
 
-    <StackPanel Grid.Row="12" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+    <StackPanel Grid.Row="13" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
       <Button Content="OK" IsDefault="True" Width="72" Margin="0,0,8,0" Click="Ok_Click"
               IsEnabled="{Binding CanAccept}"/>
       <Button Content="Cancel" IsCancel="True" Width="72" Click="Cancel_Click"/>

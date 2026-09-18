@@ -42,6 +42,12 @@ public sealed class WorldOptions
     /// </summary>
     public WorldAxis DriftAxis { get; set; } = WorldAxis.X;
 
+    /// <summary>
+    /// Gets or sets the cylinder radius (world units) of <see cref="WorldKind.ToroidalStream"/>.
+    /// Asteroids are sampled uniformly in the disk perpendicular to <see cref="DriftAxis"/>. Default: 120.
+    /// </summary>
+    public double StreamRadius { get; set; } = 120;
+
     /// <summary>Gets or sets the default agent sensor range.</summary>
     public double SensorRange { get; set; } = 80;
 
