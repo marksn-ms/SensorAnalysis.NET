@@ -18,6 +18,7 @@ using SensorAnalysis.App.Views;
 using SensorAnalysis.App.Visualization;
 using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Deployment;
+using SensorAnalysis.Core.Plugins;
 using SensorAnalysis.Core.Domain;
 using SensorAnalysis.Core.Messaging;
 using SensorAnalysis.Core.Metrics;
@@ -63,6 +64,9 @@ public partial class MainViewModel : ObservableObject
     /// <summary>Trials/ticks from the last loaded recipe; used by Run Experiment when set.</summary>
     private int? _recipeTrials;
     private int? _recipeTicks;
+    private readonly List<string> _recipePlugins = new();
+    private readonly HashSet<string> _importedPluginPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<Func<IWatcher>> _pluginWatcherFactories = new();
 
     /// <summary>Non-dialog AVI path when set by --record-video PATH.</summary>
     private string? _autoVideoPath;
@@ -672,14 +676,56 @@ public partial class MainViewModel : ObservableObject
         StatusText = $"Recipe saved: {dlg.FileName}";
     }
 
+    /// <summary>
+    /// Load recipe plugin DLLs by reflection and register their agents, deployers, and watchers.
+    /// The host does not reference the research project.
+    /// </summary>
+    private void ImportResearchLibraries(ExperimentRecipe recipe, string recipePath)
+    {
+        var fresh = false;
+        foreach (var path in recipe.ResolvePluginPaths(recipePath))
+        {
+            if (!_importedPluginPaths.Add(path))
+                continue;
+
+            var import = ResearchLibraryLoader.Import(new[] { path });
+            import.Register(_factories, _deployables, _deployerFactories);
+            _pluginWatcherFactories.AddRange(import.WatcherFactories);
+            foreach (var watcher in import.CreateWatchers())
+                _runner.AddWatcher(watcher);
+            fresh = true;
+            StatusText = string.Join(" ", import.Messages);
+        }
+
+        if (!fresh)
+            return;
+
+        DeployableTypeNames.Clear();
+        foreach (var name in _deployables.Names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            DeployableTypeNames.Add(name);
+
+        foreach (var name in _deployerFactories.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+        {
+            if (name is "Random" or "UniformIncidents" or "PeriodicIncidents" or "PlaceNear" or "NearHost")
+                continue;
+            if (!DeployerNames.Contains(name))
+                DeployerNames.Add(name);
+        }
+
+        RebuildMetricCatalog();
+    }
+
     private void ApplyRecipe(ExperimentRecipe recipe, string path)
     {
+        ImportResearchLibraries(recipe, path);
         Stop(finalizeVideo: false);
         _videoRecorder.Clear();
         _lastWorldOptions = recipe.ToWorldOptions();
         _lastSeed = recipe.Seed;
         _recipeTrials = recipe.Trials;
         _recipeTicks = recipe.Ticks;
+        _recipePlugins.Clear();
+        _recipePlugins.AddRange(recipe.Plugins);
 
         Directives.Clear();
         foreach (var d in recipe.Directives)
@@ -708,6 +754,7 @@ public partial class MainViewModel : ObservableObject
         Trials = _recipeTrials ?? 5,
         Ticks = _recipeTicks ?? 200,
         Seed = _lastSeed,
+        Plugins = _recipePlugins.ToList(),
         World = RecipeWorld.FromWorldOptions(_lastWorldOptions),
         Directives = Directives.Select(d => new RecipeDirective
         {
@@ -762,6 +809,9 @@ public partial class MainViewModel : ObservableObject
         runner.AddWatcher(lloydOccupancy);
         runner.AddWatcher(pheromoneField);
         runner.AddWatcher(boidsPeel);
+        var pluginWatchers = _pluginWatcherFactories.Select(f => f()).ToList();
+        foreach (var watcher in pluginWatchers)
+            runner.AddWatcher(watcher);
 
         var steps = Directives.Select(ToDeployStep).ToList();
         var manifest = runner.RunExperiment(new Core.World.ExperimentRequest
@@ -778,7 +828,9 @@ public partial class MainViewModel : ObservableObject
 
         var dir = Path.Combine(Environment.CurrentDirectory, "experiments",
             $"{manifest.ExperimentName}-{DateTime.Now:yyyyMMdd-HHmmss}");
-        ExperimentExporter.Export(dir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel, crowdIntrusion, progressStall, lloydOccupancy, pheromoneField, boidsPeel });
+        var exported = new List<IWatcher> { coverage, connectivity, clearance, trustTel, crowdIntrusion, progressStall, lloydOccupancy, pheromoneField, boidsPeel };
+        exported.AddRange(pluginWatchers);
+        ExperimentExporter.Export(dir, manifest, exported);
         StatusText = $"Experiment exported to {dir}";
         MessageBox.Show($"Exported to:\n{dir}", "Done");
     }
@@ -1152,7 +1204,7 @@ public partial class MainViewModel : ObservableObject
     }
 
     private void UpdateTickText() =>
-        TickText = $"Tick {World?.CurrentTick ?? 0}  |  Agents {World?.Agents.Count ?? 0}  |  Incidents {World?.Incidents.Count(i => !i.IsDepleted) ?? 0}";
+        TickText = $"Tick {World?.CurrentTick ?? 0}  |  Agents {World?.Agents.Count ?? 0}  |  Bodies {World?.Bodies.Count ?? 0}  |  Incidents {World?.Incidents.Count(i => !i.IsDepleted) ?? 0}";
 
     private void RefreshSelectionSummary()
     {
@@ -1161,6 +1213,7 @@ public partial class MainViewModel : ObservableObject
             SelectionSummary = SelectedObject switch
             {
                 Agent a => $"Agent #{a.Id} ({a.AgentType})\nPos: ({a.Position.X:F1}, {a.Position.Y:F1})\nRange: {a.SensorRange}\nReward: {a.TotalReward:F3}",
+                Body b => $"Body #{b.Id} ({b.BodyType})\n{b.Shape} radius {b.Radius:F1} length {b.Length:F1}\nPos: ({b.Position.X:F1}, {b.Position.Y:F1})",
                 Incident i => $"Incident #{i.Id} ({i.IncidentType})\nPos: ({i.Position.X:F1}, {i.Position.Y:F1})\nIntensity: {i.Intensity:F3}",
                 Message m => $"Message #{m.Id}\nFrom: {m.FromAgentType} (#{m.FromAgentId})\nPos: ({m.Position.X:F1}, {m.Position.Y:F1})\nTTL: {m.Ttl}\n{m.Payload}",
                 _ => "Nothing selected"
@@ -1195,6 +1248,7 @@ public partial class MainViewModel : ObservableObject
                     sb.AppendLine(o switch
                     {
                         Agent a => $"  Agent #{a.Id} {a.AgentType}",
+                        Body b => $"  Body #{b.Id} {b.BodyType}",
                         Incident i => $"  Incident #{i.Id} {i.IncidentType}",
                         Message m => $"  Message #{m.Id} {m.FromAgentType}",
                         _ => $"  {o.GetType().Name} #{o.Id}"

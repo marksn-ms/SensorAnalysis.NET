@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using SensorAnalysis.Agents;
 using SensorAnalysis.Agents.Watchers;
+using SensorAnalysis.Core.Agents;
 using SensorAnalysis.Core.Deployment;
 using SensorAnalysis.Core.Metrics;
+using SensorAnalysis.Core.Plugins;
 using SensorAnalysis.Core.Serialization;
 using SensorAnalysis.Core.World;
 
@@ -57,6 +59,9 @@ if (string.IsNullOrWhiteSpace(outDir))
 
 var agents = BuiltinCatalog.CreateAgents();
 var deployers = BuiltinCatalog.CreateDeployers();
+var deployables = BuiltinCatalog.CreateDeployables();
+var pluginImport = ResearchLibraryLoader.Import(recipe.ResolvePluginPaths(recipePath));
+pluginImport.Register(agents, deployables, deployers);
 var steps = RecipeCompiler.CompileSteps(recipe, deployers);
 var worldOptions = recipe.ToWorldOptions();
 
@@ -65,6 +70,8 @@ Console.WriteLine($"  recipe={Path.GetFullPath(recipePath)}");
 Console.WriteLine($"  experiment={recipe.ExperimentName} trials={recipe.Trials} ticks={recipe.Ticks} seed={recipe.Seed}");
 Console.WriteLine($"  grid={worldOptions.TileCount.Width}x{worldOptions.TileCount.Height} tilePx={worldOptions.TileSizePx.Width} exactSensing={worldOptions.ExactSensing}");
 Console.WriteLine($"  directives={recipe.Directives.Count}: {string.Join(" | ", recipe.Directives.Select(d => $"t{d.AtTick}:{d.Deployer}"))}");
+foreach (var note in pluginImport.Messages)
+    Console.WriteLine($"  plugin: {note}");
 Console.WriteLine($"  out={outDir}");
 
 var coverage = new CoverageWatcher(sampleEveryTicks: 1);
@@ -86,10 +93,12 @@ runner.AddWatcher(progressStall);
 runner.AddWatcher(lloydOccupancy);
 runner.AddWatcher(pheromoneField);
 runner.AddWatcher(boidsPeel);
+var pluginWatchers = pluginImport.CreateWatchers();
+foreach (var watcher in pluginWatchers)
+    runner.AddWatcher(watcher);
 runner.TrialCompleted += trial =>
     Console.WriteLine($"  trial {trial + 1}/{recipe.Trials} done");
 
-var deployables = BuiltinCatalog.CreateDeployables();
 var context = new DeployContext
 {
     Deployables = deployables
@@ -109,7 +118,13 @@ var manifest = runner.RunExperiment(new ExperimentRequest
         : recipe.Notes
 });
 
-ExperimentExporter.Export(outDir, manifest, new IWatcher[] { coverage, connectivity, clearance, trustTel, crowdIntrusion, progressStall, lloydOccupancy, pheromoneField, boidsPeel });
+var exported = new List<IWatcher>
+{
+    coverage, connectivity, clearance, trustTel, crowdIntrusion,
+    progressStall, lloydOccupancy, pheromoneField, boidsPeel
+};
+exported.AddRange(pluginWatchers);
+ExperimentExporter.Export(outDir, manifest, exported);
 Console.WriteLine($"Exported → {Path.GetFullPath(outDir)}");
 return 0;
 
@@ -124,8 +139,8 @@ static void PrintUsage()
           SensorAnalysis.Cli --edit [file.json]    edit only; do not run
 
         Directives in the JSON are deployer name + parameter bags (Gaussian, Random,
-        Periodic, Uniform, …). Periodic has an optional Near type for host-relative
-        placement. There is no --regime flag.
+        Periodic, Uniform, …). A "plugins" array of DLL paths, relative to the recipe
+        file, is loaded by reflection before the run. There is no --regime flag.
 
         The GUI still launches with form defaults when given no file. Pass a recipe JSON
         to SensorAnalysis.App.exe (or File → Open Recipe) only when you want that document.

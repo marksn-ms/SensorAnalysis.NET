@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SensorAnalysis.Hallway</RootNamespace>
+    <AssemblyName>SensorAnalysis.Hallway</AssemblyName>
+    <Description>Hallway passage experiment: fixed-size walls, a waypoint plan, and a learned steering correction.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Core\SensorAnalysis.Core.csproj" />
+  </ItemGroup>
+
+</Project>

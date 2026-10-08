@@ -35,6 +35,12 @@ public sealed class ExperimentRecipe
     /// <summary>Export directory. CLI <c>--out</c> overrides this when set.</summary>
     public string Out { get; set; } = "experiments/cli-last";
 
+    /// <summary>
+    /// Research class libraries to load by reflection before directives run.
+    /// Paths are relative to the recipe file unless rooted.
+    /// </summary>
+    public List<string> Plugins { get; set; } = new();
+
     /// <summary>World construction options.</summary>
     public RecipeWorld World { get; set; } = new();
 
@@ -43,6 +49,29 @@ public sealed class ExperimentRecipe
 
     /// <summary>Maps this recipe onto <see cref="WorldOptions"/>.</summary>
     public WorldOptions ToWorldOptions() => World.ToWorldOptions();
+
+    /// <summary>
+    /// Resolves <see cref="Plugins"/> against the directory that contains <paramref name="recipeFilePath"/>.
+    /// </summary>
+    /// <param name="recipeFilePath">Path of the recipe JSON being run.</param>
+    public IReadOnlyList<string> ResolvePluginPaths(string recipeFilePath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(recipeFilePath));
+        if (string.IsNullOrEmpty(dir))
+            dir = Directory.GetCurrentDirectory();
+
+        var list = new List<string>();
+        foreach (var raw in Plugins)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+            list.Add(Path.IsPathRooted(raw)
+                ? Path.GetFullPath(raw)
+                : Path.GetFullPath(Path.Combine(dir, raw)));
+        }
+
+        return list;
+    }
 
     /// <summary>
     /// Commented starter file: 10×10 world, Gaussian OrbitingCoop, periodic incidents.
@@ -58,6 +87,8 @@ public sealed class ExperimentRecipe
   "ticks": 200,
   "seed": 42,
   "out": "experiments/cli-last",
+  // Research libraries loaded by reflection. Paths are relative to this file.
+  "plugins": [],
   "world": {
     "title": "New World",
     "tileColumns": 10,
