@@ -97,6 +97,7 @@ public class WorldCanvas : FrameworkElement
     private static readonly Brush MessageBrush = new SolidColorBrush(Color.FromRgb(180, 255, 120));
     private static readonly Brush SelectedFillBrush = new SolidColorBrush(Color.FromRgb(255, 220, 60));
     private static readonly Pen SelectedPen = new(Brushes.White, 1.5);
+    private static readonly Brush BodyBrush = new SolidColorBrush(Color.FromRgb(150, 156, 168));
     private static readonly Brush SelectedTileFill = new SolidColorBrush(Color.FromArgb(70, 255, 220, 60));
     private static readonly Pen SelectedTilePen = new(Brushes.White, 2);
     private static readonly Dictionary<string, Brush> BrushCache = new(StringComparer.Ordinal);
@@ -105,6 +106,7 @@ public class WorldCanvas : FrameworkElement
     {
         TilePen.Freeze();
         MessageBrush.Freeze();
+        BodyBrush.Freeze();
         SelectedFillBrush.Freeze();
         SelectedPen.Freeze();
         SelectedTileFill.Freeze();
@@ -248,6 +250,29 @@ public class WorldCanvas : FrameworkElement
             }
         }
 
+        // Fixed-size bodies — discs and wall capsules
+        foreach (var body in World.Bodies)
+        {
+            var selected = body.IsSelected || ReferenceEquals(body, SelectedObject);
+            var brush = selected ? SelectedFillBrush : BodyBrush;
+            if (body.Shape == BodyShape.Disc || body.Length <= 1e-6)
+            {
+                var center = WorldToScreenPoint(body.Position);
+                var radius = Math.Max(1, body.Radius * z);
+                dc.DrawEllipse(brush, selected ? SelectedPen : null, center, radius, radius);
+            }
+            else
+            {
+                var thickness = Math.Max(1, body.Radius * 2 * z);
+                var pen = new Pen(brush, thickness)
+                {
+                    StartLineCap = PenLineCap.Round,
+                    EndLineCap = PenLineCap.Round
+                };
+                dc.DrawLine(pen, WorldToScreenPoint(body.EndpointA), WorldToScreenPoint(body.EndpointB));
+            }
+        }
+
         // Incidents — triangles (or registered shape) by IncidentType
         foreach (var inc in World.Incidents)
         {
@@ -364,6 +389,8 @@ public class WorldCanvas : FrameworkElement
         if (World is null) return null;
         foreach (var a in World.Agents)
             if (World.Distance(a.Position, worldPt) <= hitR) return a;
+        foreach (var b in World.Bodies)
+            if (b.DistanceToSurface(worldPt, World.WorldWidthPx, World.WorldHeightPx) <= hitR) return b;
         foreach (var i in World.Incidents)
             if (!i.IsDepleted && World.Distance(i.Position, worldPt) <= hitR) return i;
         foreach (var m in World.Messages)

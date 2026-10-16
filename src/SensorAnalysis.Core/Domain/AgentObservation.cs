@@ -15,6 +15,7 @@ public sealed class AgentObservation
         IReadOnlyList<AgentInfo> nearbyAgents,
         IReadOnlyList<IncidentInfo> nearbyIncidents,
         IReadOnlyList<MessageInfo> nearbyMessages,
+        IReadOnlyList<BodyInfo> nearbyBodies,
         double instantReward = 0)
     {
         _world = world;
@@ -23,6 +24,7 @@ public sealed class AgentObservation
         NearbyAgents = nearbyAgents;
         NearbyIncidents = nearbyIncidents;
         NearbyMessages = nearbyMessages;
+        NearbyBodies = nearbyBodies;
         InstantReward = instantReward;
     }
 
@@ -37,6 +39,12 @@ public sealed class AgentObservation
 
     /// <summary>Local event cues, positions relative to the observer.</summary>
     public IReadOnlyList<IncidentInfo> NearbyIncidents { get; }
+
+    /// <summary>
+    /// Fixed-size bodies whose surface lies inside sensor range.
+    /// A long segment is included from its near end, not from its center.
+    /// </summary>
+    public IReadOnlyList<BodyInfo> NearbyBodies { get; }
 
     /// <summary>
     /// Radio messages delivered since the previous observation (observer-relative positions).
@@ -73,6 +81,21 @@ public sealed class AgentObservation
     public Vec2 RelativeFromAbsolute(Vec2 absolutePosition) =>
         _world.Displacement(_observerOrigin, absolutePosition);
 }
+
+/// <summary>
+/// A fixed-size body in the observer frame. Positions are minimum-image displacements.
+/// <see cref="Clearance"/> is negative when the observer is inside the body.
+/// </summary>
+public readonly record struct BodyInfo(
+    int Id,
+    Vec2 Center,
+    Vec2 NearestSurface,
+    double Clearance,
+    double Radius,
+    double Length,
+    double HeadingRadians,
+    BodyShape Shape,
+    string BodyType);
 
 /// <summary>Lightweight information about another agent in the observer frame.</summary>
 public readonly record struct AgentInfo(

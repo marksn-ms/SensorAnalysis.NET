@@ -15,6 +15,7 @@ public sealed class SimWorld
     private readonly List<Agent> _agents = new();
     private readonly List<Incident> _incidents = new();
     private readonly List<Message> _messages = new();
+    private readonly List<Body> _bodies = new();
     private readonly List<IDeployer> _deployers = new();
     private readonly Tile[,] _tiles;
     private readonly Random _rng;
@@ -67,6 +68,9 @@ public sealed class SimWorld
     /// <summary>Messages / markers currently in the world.</summary>
     public IReadOnlyList<Message> Messages => _messages;
 
+    /// <summary>Fixed-size inhabitants (walls, rocks). Agents remain points.</summary>
+    public IReadOnlyList<Body> Bodies => _bodies;
+
     /// <summary>
     /// Registered deployers ticked before agents each step (immediate then dormant, or periodic).
     /// </summary>
@@ -107,6 +111,10 @@ public sealed class SimWorld
     /// <param name="message">Message instance to add.</param>
     public void Add(Message message) => _messages.Add(message);
 
+    /// <summary>Adds a fixed-size body (wall segment, disc, or other fixture).</summary>
+    /// <param name="body">Body instance to add.</param>
+    public void Add(Body body) => _bodies.Add(body);
+
     /// <summary>
     /// Registers a deployer to receive <see cref="IDeployer.Tick"/> before agents each world tick.
     /// </summary>
@@ -122,12 +130,13 @@ public sealed class SimWorld
     /// <summary>Active (non-depleted) incidents — used by privileged oracles and telemetry.</summary>
     public IEnumerable<Incident> ActiveIncidents => _incidents.Where(i => !i.IsDepleted);
 
-    /// <summary>Removes all agents, incidents, and messages (tiles and deployers are retained).</summary>
+    /// <summary>Removes all agents, incidents, messages, and bodies (tiles and deployers are retained).</summary>
     public void ClearEntities()
     {
         _agents.Clear();
         _incidents.Clear();
         _messages.Clear();
+        _bodies.Clear();
         Pheromones.Clear();
     }
 
@@ -176,6 +185,11 @@ public sealed class SimWorld
             if (!i.IsDepleted && Inside(i.Position)) yield return i;
         foreach (var m in _messages)
             if (Inside(m.Position)) yield return m;
+        foreach (var b in _bodies)
+        {
+            if (b.IntersectsAabb(x0, y0, x1, y1, WorldWidthPx, WorldHeightPx))
+                yield return b;
+        }
     }
 
     /// <summary>Returns the tile containing <paramref name="p"/> (coordinates are wrapped first).</summary>
@@ -210,6 +224,7 @@ public sealed class SimWorld
         var nearbyMessages = self.DrainInbox()
             .Select(m => MessageInfo.ForObserver(m, Displacement(origin, m.Position), self.Id))
             .ToList();
+        var nearbyBodies = SenseBodies(origin, range);
 
         var obs = new AgentObservation(
             this,
@@ -217,7 +232,8 @@ public sealed class SimWorld
             CurrentTick,
             nearbyAgents,
             nearbyIncidents,
-            nearbyMessages);
+            nearbyMessages,
+            nearbyBodies);
 
         obs.InstantReward = RewardModel.Evaluate(self, obs, this);
         return obs;
@@ -295,6 +311,9 @@ public sealed class SimWorld
         foreach (var agent in _agents)
             agent.Tick(ctx);
 
+        // 1b. Anchored bodies keep their extent. Push penetrating agents back to the surface.
+        SeparateAgentsFromBodies();
+
         // 2. Drain incidents near agents (closest N contributors only)
         var maxDrainers = Math.Max(1, Options.MaxDrainingAgentsPerIncident);
         foreach (var incident in _incidents)
@@ -366,6 +385,64 @@ public sealed class SimWorld
         }
 
         return list;
+    }
+
+    private List<BodyInfo> SenseBodies(Vec2 origin, double range)
+    {
+        var list = new List<BodyInfo>();
+        foreach (var body in _bodies)
+        {
+            var clearance = body.DistanceToSurface(origin, WorldWidthPx, WorldHeightPx);
+            if (clearance > range)
+                continue;
+
+            var surface = body.NearestSurfacePoint(origin, WorldWidthPx, WorldHeightPx);
+            list.Add(new BodyInfo(
+                body.Id,
+                Displacement(origin, body.Position),
+                Displacement(origin, surface),
+                clearance,
+                body.Radius,
+                body.Length,
+                body.HeadingRadians,
+                body.Shape,
+                body.BodyType));
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// Moves agents that have entered an anchored body back to its surface.
+    /// Agent-agent overlap is left to the experiment. Worlds with no bodies are unchanged.
+    /// </summary>
+    private void SeparateAgentsFromBodies()
+    {
+        if (_bodies.Count == 0 || _agents.Count == 0)
+            return;
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            var moved = false;
+            foreach (var agent in _agents)
+            {
+                foreach (var body in _bodies)
+                {
+                    if (!body.IsAnchored)
+                        continue;
+
+                    var clearance = body.DistanceToSurface(agent.Position, WorldWidthPx, WorldHeightPx);
+                    if (clearance >= 0)
+                        continue;
+
+                    agent.Position = body.NearestSurfacePoint(agent.Position, WorldWidthPx, WorldHeightPx);
+                    moved = true;
+                }
+            }
+
+            if (!moved)
+                break;
+        }
     }
 
     private static Tile[,] BuildTiles(WorldOptions options)
