@@ -35,6 +35,9 @@
       <MenuItem Header="_View">
         <MenuItem Header="_Centered" IsCheckable="True" IsChecked="{Binding ViewCentered}"/>
       </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="Check for _updates…" Click="CheckForUpdates_Click"/>
+      </MenuItem>
     </Menu>
 
     <StatusBar DockPanel.Dock="Bottom">

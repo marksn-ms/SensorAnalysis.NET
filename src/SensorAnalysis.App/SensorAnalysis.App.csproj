@@ -9,10 +9,19 @@
     <Description>WPF visualization and experiment control UI for SensorAnalysis.</Description>
     <ApplicationIcon />
     <Nullable>enable</Nullable>
+    <!-- Keep equal to distribution/products.json. A version increase on the default branch publishes this product. -->
+    <Version>0.2.0</Version>
+    <StartupObject>SensorAnalysis.App.App</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
@@ -21,6 +30,8 @@
   <ItemGroup>
     <ProjectReference Include="..\SensorAnalysis.Core\SensorAnalysis.Core.csproj" />
     <ProjectReference Include="..\SensorAnalysis.Agents\SensorAnalysis.Agents.csproj" />
+    <ProjectReference Include="..\SensorAnalysis.Distribution\SensorAnalysis.Distribution.csproj" />
+    <ProjectReference Include="..\SensorAnalysis.Updates\SensorAnalysis.Updates.csproj" />
   </ItemGroup>
 
 </Project>

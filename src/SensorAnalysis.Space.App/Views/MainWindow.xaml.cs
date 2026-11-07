@@ -4,7 +4,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
+using SensorAnalysis.Distribution;
 using SensorAnalysis.Space.App.Rendering;
+using SensorAnalysis.Updates;
 using SensorAnalysis.Space.Core.Domain;
 using SensorAnalysis.Space.Core.World;
 
@@ -56,8 +58,16 @@ public partial class MainWindow : Window
         InitializeComponent();
         WorldViewport.Camera = _camera;
         _timer.Tick += (_, _) => AdvanceSimulation();
+        Loaded += async (_, _) =>
+        {
+            if (ProductUpdates.ShouldOfferOnStartup())
+                await ProductUpdates.OfferAsync(ProductIds.Space, this, interactive: false);
+        };
         RenderWorld();
     }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e) =>
+        await ProductUpdates.OfferAsync(ProductIds.Space, this, interactive: true);
 
     private void AdvanceSimulation()
     {

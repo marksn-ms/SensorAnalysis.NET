@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SensorAnalysis.Distribution.Tool</RootNamespace>
+    <AssemblyName>ReleasePlan</AssemblyName>
+    <Description>Decides which SensorAnalysis products a commit should publish. No secrets are required.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SensorAnalysis.Distribution\SensorAnalysis.Distribution.csproj" />
+  </ItemGroup>
+
+</Project>

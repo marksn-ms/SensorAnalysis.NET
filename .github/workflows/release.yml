@@ -1,0 +1,207 @@
+name: Release
+
+# Publishes a product only when its version in distribution/products.json increases
+# on the default branch. Ordinary commits do not match the path filter.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - distribution/products.json
+
+concurrency:
+  group: distribution-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan product releases
+    runs-on: windows-latest
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      releases: ${{ steps.plan.outputs.releases }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Decide which products to publish
+        id: plan
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          dotnet build distribution/ReleasePlan/ReleasePlan.csproj -c Release --verbosity quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $previous = Join-Path $env:RUNNER_TEMP "previous-products.json"
+          $show = git show "HEAD^:distribution/products.json" 2>$null
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($show)) {
+            "null" | Set-Content -Encoding utf8NoBOM $previous
+          } else {
+            $show | Set-Content -Encoding utf8NoBOM $previous
+          }
+
+          $json = dotnet run --project distribution/ReleasePlan/ReleasePlan.csproj -c Release --no-build --verbosity quiet -- plan --previous $previous --current distribution/products.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $json = ($json | Out-String).Trim()
+          $count = [System.Text.Json.JsonDocument]::Parse($json).RootElement.GetArrayLength()
+          "count=$count" | Add-Content -Encoding utf8NoBOM $env:GITHUB_OUTPUT
+          "releases=$json" | Add-Content -Encoding utf8NoBOM $env:GITHUB_OUTPUT
+
+  release:
+    name: Publish ${{ matrix.product.id }} ${{ matrix.product.version }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix:
+        product: ${{ fromJson(needs.plan.outputs.releases) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Refuse an existing release
+        shell: pwsh
+        env:
+          TAG: ${{ matrix.product.tag }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $env:TAG | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "Release $env:TAG already exists. This workflow does not overwrite tags or releases."
+            exit 1
+          }
+
+      - name: Test the product
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          dotnet test tests/SensorAnalysis.Distribution.Tests/SensorAnalysis.Distribution.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test "${{ matrix.product.testProject }}" -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Download the previous full package
+        id: previous
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ matrix.product.id }}
+          VERSION: ${{ matrix.product.version }}
+          PACK_ID: ${{ matrix.product.packId }}
+          CHANNEL: ${{ matrix.product.channel }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          dotnet build distribution/ReleasePlan/ReleasePlan.csproj -c Release --verbosity quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $list = Join-Path $env:RUNNER_TEMP "github-releases.json"
+          gh release list --limit 200 --json tagName,isDraft,isPrerelease | Set-Content -Encoding utf8NoBOM $list
+          $tag = dotnet run --project distribution/ReleasePlan/ReleasePlan.csproj -c Release --no-build --verbosity quiet -- previous --releases $list --id $env:PRODUCT_ID --version $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tag = ($tag | Out-String).Trim()
+          "tag=$tag" | Add-Content -Encoding utf8NoBOM $env:GITHUB_OUTPUT
+          if ([string]::IsNullOrWhiteSpace($tag)) { exit 0 }
+          $base = Join-Path $env:RUNNER_TEMP "base-packages"
+          New-Item -ItemType Directory -Path $base | Out-Null
+          gh release download $tag --dir $base --pattern "$env:PACK_ID-*-$env:CHANNEL-full.nupkg" --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Pack
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ matrix.product.id }}
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $packArgs = @{ ProductId = $env:PRODUCT_ID }
+          if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS)) {
+            $packArgs.BasePackages = Join-Path $env:RUNNER_TEMP "base-packages"
+          }
+          & ./distribution/pack.ps1 @packArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Generate build provenance
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/upload/${{ matrix.product.id }}/*
+
+      - name: Record when provenance is unavailable
+        if: github.event.repository.visibility != 'public'
+        shell: pwsh
+        run: |
+          "GitHub Artifact Attestations were not generated because this repository is not public. Private repositories need GitHub Enterprise Cloud for attestations." | Add-Content -Encoding utf8NoBOM $env:GITHUB_STEP_SUMMARY
+
+      - name: Publish the GitHub Release
+        shell: pwsh
+        env:
+          TAG: ${{ matrix.product.tag }}
+          TITLE: ${{ matrix.product.title }}
+          VERSION: ${{ matrix.product.version }}
+          PRODUCT_ID: ${{ matrix.product.id }}
+          CHANNEL: ${{ matrix.product.channel }}
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $env:TAG | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "Release $env:TAG already exists. This workflow does not overwrite tags or releases."
+            exit 1
+          }
+
+          $compare = ""
+          if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS)) {
+            $compare = "Changes since ``$env:PREVIOUS``: https://github.com/${{ github.repository }}/compare/${{ env.PREVIOUS }}...$env:TAG"
+          }
+          $provenance = if ($env:VISIBILITY -eq "public") {
+            "Build provenance was recorded with GitHub Artifact Attestations. Verify it with ``gh attestation verify <file> --repo ${{ github.repository }}``."
+          } else {
+            "Build provenance was not recorded. This repository is not public, and private attestations require GitHub Enterprise Cloud."
+          }
+          @"
+          ## $env:TITLE $env:VERSION
+
+          Windows x64 installer for ``$env:PRODUCT_ID``. The package is self-contained and is not Authenticode signed.
+
+          - Installer: ``$env:PRODUCT_ID-$env:CHANNEL-Setup.exe``
+          - Portable folder: ``$env:PRODUCT_ID-$env:CHANNEL-Portable.zip``
+          - Full update package: ``$env:PRODUCT_ID-$env:VERSION-$env:CHANNEL-full.nupkg``
+          - Update feed: ``releases.$env:CHANNEL.json``
+          - Checksums: ``SHA256SUMS.txt``
+
+          $compare
+
+          $provenance
+
+          Installed copies check this product's tag prefix ``$env:PRODUCT_ID-v`` and channel ``$env:CHANNEL``. Do not use ``/releases/latest`` to find this product.
+          "@ | Set-Content -Encoding utf8NoBOM "$env:RUNNER_TEMP/notes.md"
+
+          $files = Get-ChildItem "artifacts/upload/$env:PRODUCT_ID" -File
+          if (-not $files) { Write-Error "No files were packaged."; exit 1 }
+          gh release create $env:TAG --title "$env:TITLE $env:VERSION" --notes-file "$env:RUNNER_TEMP/notes.md" $files.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
