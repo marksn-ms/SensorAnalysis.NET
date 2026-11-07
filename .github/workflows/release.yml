@@ -1,12 +1,13 @@
 name: Release
 
-# Publishes a product only when its version in distribution/products.json increases
-# on the default branch. Ordinary commits do not match the path filter.
+# A push publishes a product only when its version in distribution/products.json
+# increases. workflow_dispatch publishes current versions that have no tag yet.
 on:
   push:
     branches: [master, main]
     paths:
       - distribution/products.json
+  workflow_dispatch:
 
 concurrency:
   group: distribution-${{ github.repository }}
@@ -14,6 +15,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # gh does not read GITHUB_TOKEN unless it is also exposed as GH_TOKEN.
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   plan:
@@ -42,15 +47,22 @@ jobs:
           dotnet build distribution/ReleasePlan/ReleasePlan.csproj -c Release --verbosity quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $previous = Join-Path $env:RUNNER_TEMP "previous-products.json"
-          $show = git show "HEAD^:distribution/products.json" 2>$null
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($show)) {
-            "null" | Set-Content -Encoding utf8NoBOM $previous
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $list = Join-Path $env:RUNNER_TEMP "github-releases.json"
+            gh release list --limit 200 --json tagName,isDraft,isPrerelease | Set-Content -Encoding utf8NoBOM $list
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $json = dotnet run --project distribution/ReleasePlan/ReleasePlan.csproj -c Release --no-build --verbosity quiet -- pending --current distribution/products.json --releases $list
           } else {
-            $show | Set-Content -Encoding utf8NoBOM $previous
-          }
+            $previous = Join-Path $env:RUNNER_TEMP "previous-products.json"
+            $show = git show "HEAD^:distribution/products.json" 2>$null
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($show)) {
+              "null" | Set-Content -Encoding utf8NoBOM $previous
+            } else {
+              $show | Set-Content -Encoding utf8NoBOM $previous
+            }
 
-          $json = dotnet run --project distribution/ReleasePlan/ReleasePlan.csproj -c Release --no-build --verbosity quiet -- plan --previous $previous --current distribution/products.json
+            $json = dotnet run --project distribution/ReleasePlan/ReleasePlan.csproj -c Release --no-build --verbosity quiet -- plan --previous $previous --current distribution/products.json
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $json = ($json | Out-String).Trim()
           $count = [System.Text.Json.JsonDocument]::Parse($json).RootElement.GetArrayLength()
@@ -92,6 +104,7 @@ jobs:
             Write-Error "Release $env:TAG already exists. This workflow does not overwrite tags or releases."
             exit 1
           }
+          exit 0
 
       - name: Test the product
         shell: pwsh
@@ -205,3 +218,4 @@ jobs:
           if (-not $files) { Write-Error "No files were packaged."; exit 1 }
           gh release create $env:TAG --title "$env:TITLE $env:VERSION" --notes-file "$env:RUNNER_TEMP/notes.md" $files.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          exit 0

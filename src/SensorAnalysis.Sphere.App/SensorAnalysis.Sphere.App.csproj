@@ -6,7 +6,7 @@
     <AssemblyName>SensorAnalysis.Sphere.App</AssemblyName>
     <RootNamespace>SensorAnalysis.Sphere.App</RootNamespace>
     <!-- Keep equal to distribution/products.json. A version increase on the default branch publishes this product. -->
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <StartupObject>SensorAnalysis.Sphere.App.App</StartupObject>
   </PropertyGroup>
   <ItemGroup>

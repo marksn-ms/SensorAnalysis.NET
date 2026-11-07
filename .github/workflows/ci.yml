@@ -20,9 +20,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-      - run: dotnet restore
-      - run: dotnet build -c Release --no-restore
-      - run: dotnet test -c Release --no-build --logger trx
+      - run: dotnet restore SensorAnalysis.sln
+      - run: dotnet build SensorAnalysis.sln -c Release --no-restore
+      - run: dotnet test SensorAnalysis.sln -c Release --no-build --logger trx
       - name: Smoke CLI
         run: |
           dotnet run --project src/SensorAnalysis.Cli -c Release --no-build -- `
