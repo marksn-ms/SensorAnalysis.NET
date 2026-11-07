@@ -56,6 +56,19 @@ public class ReleasePlannerTests
         releases.Select(release => release.Id).Should().Equal(ProductIds.Sphere);
     }
 
+    /// <summary>A manual run can publish a version whose tag was never created.</summary>
+    [Fact]
+    public void Unpublished_SkipsProductsThatAlreadyHaveATag()
+    {
+        var catalog = SampleCatalog();
+        var tagged = ReleaseTags.For(catalog.Products[0].Id, catalog.Products[0].Version);
+        var releases = new[] { Release(tagged, draft: true) };
+
+        var pending = ReleasePlanner.Unpublished(catalog, releases);
+
+        pending.Select(release => release.Id).Should().Equal(ProductIds.Space, ProductIds.Sphere);
+    }
+
     /// <summary>A lower version is a mistake, not a release.</summary>
     [Fact]
     public void Plan_WhenVersionDecreases_Fails()

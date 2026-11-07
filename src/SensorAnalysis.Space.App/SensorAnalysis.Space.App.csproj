@@ -8,7 +8,7 @@
     <Description>WPF Viewport3D client for the SensorAnalysis.Space volumetric platform.</Description>
     <Nullable>enable</Nullable>
     <!-- Keep equal to distribution/products.json. A version increase on the default branch publishes this product. -->
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <StartupObject>SensorAnalysis.Space.App.App</StartupObject>
   </PropertyGroup>
   <ItemGroup>

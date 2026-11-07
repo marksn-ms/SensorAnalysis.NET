@@ -20,6 +20,7 @@ public static class Program
             return args[0] switch
             {
                 "plan" => Plan(args.Skip(1).ToArray()),
+                "pending" => Pending(args.Skip(1).ToArray()),
                 "previous" => Previous(args.Skip(1).ToArray()),
                 _ => Fail($"Unknown command '{args[0]}'.")
             };
@@ -43,18 +44,35 @@ public static class Program
         return 0;
     }
 
+    private static int Pending(string[] args)
+    {
+        var currentPath = RequireOption(args, "--current");
+        var releasesPath = RequireOption(args, "--releases");
+        var current = ProductCatalog.Load(currentPath)
+            ?? throw new InvalidDataException("The current manifest is missing.");
+        var releases = ReadReleases(releasesPath);
+        var pending = ReleasePlanner.Unpublished(current, releases);
+        Console.WriteLine(JsonSerializer.Serialize(pending, ProductCatalog.JsonOptions));
+        return 0;
+    }
+
     private static int Previous(string[] args)
     {
         var releasesPath = RequireOption(args, "--releases");
         var productId = RequireOption(args, "--id");
         var version = RequireOption(args, "--version");
-        var text = File.ReadAllText(releasesPath).Trim().TrimStart('\uFEFF');
-        var releases = JsonSerializer.Deserialize<List<PublishedRelease>>(text, ProductCatalog.JsonOptions)
-            ?? throw new InvalidDataException("The release list is empty.");
+        var releases = ReadReleases(releasesPath);
         var tag = ReleasePlanner.PreviousStableTag(releases, productId, version);
         if (!string.IsNullOrEmpty(tag))
             Console.WriteLine(tag);
         return 0;
+    }
+
+    private static List<PublishedRelease> ReadReleases(string path)
+    {
+        var text = File.ReadAllText(path).Trim().TrimStart('\uFEFF');
+        return JsonSerializer.Deserialize<List<PublishedRelease>>(text, ProductCatalog.JsonOptions)
+            ?? throw new InvalidDataException("The release list is empty.");
     }
 
     private static string RequireOption(string[] args, string name)
@@ -86,11 +104,13 @@ public static class Program
 
         Usage:
           ReleasePlan plan --previous <file> --current <file>
+          ReleasePlan pending --current <file> --releases <file>
           ReleasePlan previous --releases <file> --id <product-id> --version <X.Y.Z>
           ReleasePlan --help
 
         plan writes a JSON array to standard output. An empty array means do not publish.
         Pass a file whose contents are null as --previous when the manifest is new.
+        pending writes products whose current version has no GitHub tag yet.
         previous writes the older stable tag for that product, or writes nothing.
 
         Example:

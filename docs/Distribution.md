@@ -49,9 +49,11 @@ To try a delta locally, pack once, copy the `*-full.nupkg` aside, then pack agai
 
 ## Change a version and publish
 
-1. Set the same `MAJOR.MINOR.PATCH` version in `distribution/products.json` and in that application's `.csproj` `<Version>`.
+1. Set the same `MAJOR.MINOR.PATCH` version in `distribution/products.json` and in that application's `.csproj` `<Version>`. The release job stops when those two values differ.
 2. Open a pull request. CI builds and tests. It does not publish.
 3. Merge to `master`.
+
+If that workflow fails before it creates the tag, fix the failure and then run the Release workflow by hand from the Actions tab. A manual run publishes each current manifest version that does not already have a tag. It does not replace an existing tag.
 
 The release workflow runs only when `distribution/products.json` changes on `master`. It compares that file with the previous commit:
 

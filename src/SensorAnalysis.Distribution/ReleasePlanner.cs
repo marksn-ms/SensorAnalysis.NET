@@ -86,6 +86,20 @@ public static class ReleasePlanner
         return releases;
     }
 
+    /// <summary>
+    /// Products whose current manifest version has no GitHub tag yet.
+    /// Used to recover a release that failed before the tag was created.
+    /// </summary>
+    public static IReadOnlyList<PlannedRelease> Unpublished(ProductCatalog current, IEnumerable<PublishedRelease> releases)
+    {
+        current.Validate();
+        var tags = new HashSet<string>(releases.Select(release => release.TagName), StringComparer.OrdinalIgnoreCase);
+        return current.Products
+            .Where(product => !tags.Contains(ReleaseTags.For(product.Id, product.Version)))
+            .Select(ToRelease)
+            .ToList();
+    }
+
     /// <summary>Selects the highest stable tag for this product that is older than <paramref name="version"/>.</summary>
     public static string? PreviousStableTag(IEnumerable<PublishedRelease> releases, string productId, string version)
     {
