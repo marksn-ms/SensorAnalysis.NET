@@ -6,7 +6,7 @@
     {
       "id": "sensoranalysis",
       "title": "SensorAnalysis",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "project": "src/SensorAnalysis.App/SensorAnalysis.App.csproj",
       "assemblyName": "SensorAnalysis.App",
       "packId": "sensoranalysis",
@@ -16,7 +16,7 @@
     {
       "id": "sensoranalysis.space",
       "title": "SensorAnalysis Space",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "project": "src/SensorAnalysis.Space.App/SensorAnalysis.Space.App.csproj",
       "assemblyName": "SensorAnalysis.Space.App",
       "packId": "sensoranalysis.space",
@@ -26,7 +26,7 @@
     {
       "id": "sensoranalysis.sphere",
       "title": "SensorAnalysis Sphere",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "project": "src/SensorAnalysis.Sphere.App/SensorAnalysis.Sphere.App.csproj",
       "assemblyName": "SensorAnalysis.Sphere.App",
       "packId": "sensoranalysis.sphere",
