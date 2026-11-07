@@ -263,6 +263,7 @@ out/
 
 ## Documentation
 
+- [docs/Distribution.md](docs/Distribution.md) — Windows installers, versions, and updates
 - [docs/DeveloperGuide.md](docs/DeveloperGuide.md) — add agents, deployers, watchers
 - [docs/ExperimentExport.md](docs/ExperimentExport.md) — CSV/JSON schema
 - Sibling paper workflow: `../Trust/README.md`

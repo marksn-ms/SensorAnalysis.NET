@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SensorAnalysis.Distribution</RootNamespace>
+    <AssemblyName>SensorAnalysis.Distribution</AssemblyName>
+    <Description>Product manifest and release planning for Sandmark desktop distribution.</Description>
+  </PropertyGroup>
+
+</Project>

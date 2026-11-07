@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 env:
   DOTNET_VERSION: "8.0.x"
 
@@ -26,3 +29,9 @@ jobs:
             --trials 2 --ticks 20 --agents 5 --incidents 2 `
             --agent-type RandomWalk --seed 1 --out ./smoke-out
           Test-Path ./smoke-out/metrics.csv
+      - name: Build and test Space and Sphere
+        run: |
+          dotnet test tests/SensorAnalysis.Space.Core.Tests/SensorAnalysis.Space.Core.Tests.csproj -c Release
+          dotnet build src/SensorAnalysis.Space.App/SensorAnalysis.Space.App.csproj -c Release
+          dotnet test tests/SensorAnalysis.Sphere.Core.Tests/SensorAnalysis.Sphere.Core.Tests.csproj -c Release
+          dotnet build src/SensorAnalysis.Sphere.App/SensorAnalysis.Sphere.App.csproj -c Release

@@ -8,7 +8,9 @@ using System.Windows.Threading;
 using System.Text.Json;
 using System.IO;
 using Microsoft.Win32;
+using SensorAnalysis.Distribution;
 using SensorAnalysis.Sphere.Core.Geometry;
+using SensorAnalysis.Updates;
 using SensorAnalysis.Sphere.Core.Serialization;
 using SensorAnalysis.Sphere.Core.Simulation;
 
@@ -63,8 +65,16 @@ public partial class MainWindow : Window
         InitializeComponent();
         WorldViewport.Camera = _camera;
         _timer.Tick += (_, _) => AdvanceSimulation();
+        Loaded += async (_, _) =>
+        {
+            if (ProductUpdates.ShouldOfferOnStartup())
+                await ProductUpdates.OfferAsync(ProductIds.Sphere, this, interactive: false);
+        };
         RenderWorld();
     }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e) =>
+        await ProductUpdates.OfferAsync(ProductIds.Sphere, this, interactive: true);
 
     private void AdvanceSimulation()
     {

@@ -1,5 +1,7 @@
 using System.Windows;
 using SensorAnalysis.App.ViewModels;
+using SensorAnalysis.Distribution;
+using SensorAnalysis.Updates;
 
 namespace SensorAnalysis.App.Views;
 
@@ -12,10 +14,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         var vm = new MainViewModel();
         DataContext = vm;
-        Loaded += (_, _) =>
+        Loaded += async (_, _) =>
         {
             vm.Canvas = WorldView;
             vm.TryLoadStartupRecipe();
+            if (ProductUpdates.ShouldOfferOnStartup())
+                await ProductUpdates.OfferAsync(ProductIds.SensorAnalysis, this, interactive: false);
         };
         Closing += (_, _) =>
         {
@@ -23,4 +27,7 @@ public partial class MainWindow : Window
                 viewModel.SaveAppSettings();
         };
     }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e) =>
+        await ProductUpdates.OfferAsync(ProductIds.SensorAnalysis, this, interactive: true);
 }

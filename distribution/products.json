@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/marksn-ms/SensorAnalysis.NET",
+  "runtime": "win-x64",
+  "velopackVersion": "1.2.161",
+  "products": [
+    {
+      "id": "sensoranalysis",
+      "title": "SensorAnalysis",
+      "version": "0.2.0",
+      "project": "src/SensorAnalysis.App/SensorAnalysis.App.csproj",
+      "assemblyName": "SensorAnalysis.App",
+      "packId": "sensoranalysis",
+      "channel": "sensoranalysis",
+      "testProject": "tests/SensorAnalysis.Core.Tests/SensorAnalysis.Core.Tests.csproj"
+    },
+    {
+      "id": "sensoranalysis.space",
+      "title": "SensorAnalysis Space",
+      "version": "0.2.0",
+      "project": "src/SensorAnalysis.Space.App/SensorAnalysis.Space.App.csproj",
+      "assemblyName": "SensorAnalysis.Space.App",
+      "packId": "sensoranalysis.space",
+      "channel": "sensoranalysis.space",
+      "testProject": "tests/SensorAnalysis.Space.Core.Tests/SensorAnalysis.Space.Core.Tests.csproj"
+    },
+    {
+      "id": "sensoranalysis.sphere",
+      "title": "SensorAnalysis Sphere",
+      "version": "0.2.0",
+      "project": "src/SensorAnalysis.Sphere.App/SensorAnalysis.Sphere.App.csproj",
+      "assemblyName": "SensorAnalysis.Sphere.App",
+      "packId": "sensoranalysis.sphere",
+      "channel": "sensoranalysis.sphere",
+      "testProject": "tests/SensorAnalysis.Sphere.Core.Tests/SensorAnalysis.Sphere.Core.Tests.csproj"
+    }
+  ]
+}

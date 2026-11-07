@@ -27,6 +27,9 @@
         <MenuItem Header="_Reset camera" Click="ResetCamera_Click" InputGestureText="Home"/>
         <MenuItem Header="_Frame selection" Click="FrameSelection_Click" InputGestureText="F"/>
       </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="Check for _updates…" Click="CheckForUpdates_Click"/>
+      </MenuItem>
     </Menu>
 
     <StatusBar DockPanel.Dock="Bottom">

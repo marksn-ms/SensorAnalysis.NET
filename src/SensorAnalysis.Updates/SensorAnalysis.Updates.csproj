@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SensorAnalysis.Updates</RootNamespace>
+    <AssemblyName>SensorAnalysis.Updates</AssemblyName>
+    <Description>Velopack update check shared by the SensorAnalysis desktop applications.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SensorAnalysis.Distribution\SensorAnalysis.Distribution.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\distribution\products.json" Link="products.json" />
+  </ItemGroup>
+
+</Project>
